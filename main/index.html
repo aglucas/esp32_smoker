@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESP32 Smoker</title>
+<style>
+  :root {
+    --bg:#14181c; --panel:#1e242b; --text:#e8edf2; --muted:#8ea0ac;
+    --meat:#e07a1f; --grill:#d9433e; --accent:#3fa9f5; --ok:#3fbf6f; --border:#2b333b;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:16px 20px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; }
+  header h1 { font-size:18px; margin:0; }
+  #status { font-size:13px; color:var(--muted); }
+  #status.ok { color:var(--ok); }
+  main { max-width:900px; margin:0 auto; padding:16px 20px 60px; }
+  .readouts { display:flex; gap:16px; margin-bottom:20px; flex-wrap:wrap; }
+  .card { flex:1; min-width:160px; background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:16px; }
+  .card .label { font-size:13px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+  .card .value { font-size:38px; font-weight:600; margin-top:6px; }
+  .card.meat .value { color:var(--meat); }
+  .card.grill .value { color:var(--grill); }
+  #chartWrap { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:12px; }
+  canvas { width:100%; height:320px; display:block; }
+  .legend { display:flex; gap:16px; font-size:13px; color:var(--muted); margin-top:8px; }
+  .legend span::before { content:""; display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; }
+  .legend .meat::before { background:var(--meat); }
+  .legend .grill::before { background:var(--grill); }
+  #wifiPanel { margin-top:24px; background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:16px; display:none; }
+  #wifiPanel h2 { margin-top:0; font-size:16px; }
+  #networks { list-style:none; padding:0; margin:0 0 12px; max-height:200px; overflow-y:auto; }
+  #networks li { display:flex; justify-content:space-between; align-items:center; padding:8px 4px; border-bottom:1px solid var(--border); cursor:pointer; }
+  #networks li:hover { background:#232b33; }
+  form#wifiForm { display:flex; gap:8px; flex-wrap:wrap; }
+  input { background:#0f1317; border:1px solid var(--border); color:var(--text); padding:8px 10px; border-radius:6px; }
+  #wifiForm input[name="ssid"] { flex:1; min-width:140px; }
+  button { background:var(--accent); color:#08131c; border:none; padding:8px 14px; border-radius:6px; font-weight:600; cursor:pointer; }
+  button.secondary { background:transparent; border:1px solid var(--border); color:var(--text); }
+  #wifiMsg { font-size:13px; color:var(--muted); margin-top:8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ESP32 Smoker</h1>
+  <div id="status">connecting&hellip;</div>
+</header>
+<main>
+  <div class="readouts">
+    <div class="card meat">
+      <div class="label">Probe A &middot; Meat</div>
+      <div class="value" id="meatVal">--.-&deg;C</div>
+    </div>
+    <div class="card grill">
+      <div class="label">Probe B &middot; Grill</div>
+      <div class="value" id="grillVal">--.-&deg;C</div>
+    </div>
+  </div>
+
+  <div id="chartWrap">
+    <canvas id="chart"></canvas>
+    <div class="legend"><span class="meat">Meat</span><span class="grill">Grill</span></div>
+  </div>
+
+  <div id="wifiPanel">
+    <h2>Wi-Fi Setup</h2>
+    <p style="color:var(--muted); font-size:13px;">No known network is reachable, so this device is broadcasting its own access point. Pick a network below and enter its password to connect the smoker to your Wi-Fi.</p>
+    <ul id="networks"></ul>
+    <form id="wifiForm">
+      <input type="text" name="ssid" placeholder="Network name" required>
+      <input type="password" name="password" placeholder="Password">
+      <button type="submit">Connect</button>
+      <button type="button" class="secondary" id="rescan">Rescan</button>
+    </form>
+    <div id="wifiMsg"></div>
+  </div>
+</main>
+
+<script>
+const statusEl = document.getElementById('status');
+const meatVal = document.getElementById('meatVal');
+const grillVal = document.getElementById('grillVal');
+const wifiPanel = document.getElementById('wifiPanel');
+const networksEl = document.getElementById('networks');
+const wifiForm = document.getElementById('wifiForm');
+const wifiMsg = document.getElementById('wifiMsg');
+const canvas = document.getElementById('chart');
+const ctx = canvas.getContext('2d');
+
+function fmtTemp(c) {
+  if (c === null || c === undefined || Number.isNaN(c)) return '--.-°C';
+  return c.toFixed(1) + '°C';
+}
+
+async function refreshStatus() {
+  try {
+    const res = await fetch('/api/status');
+    const s = await res.json();
+    meatVal.textContent = fmtTemp(s.meat_c);
+    grillVal.textContent = fmtTemp(s.grill_c);
+
+    if (s.ap_mode) {
+      statusEl.textContent = 'Setup mode · AP "' + s.ssid + '"';
+      statusEl.className = '';
+      wifiPanel.style.display = 'block';
+    } else if (s.sta_connected) {
+      statusEl.textContent = 'Connected to ' + s.ssid + ' (' + s.ip + ')';
+      statusEl.className = 'ok';
+      wifiPanel.style.display = 'none';
+    } else {
+      statusEl.textContent = 'Connecting…';
+      statusEl.className = '';
+    }
+  } catch (e) {
+    statusEl.textContent = 'Offline';
+    statusEl.className = '';
+  }
+}
+
+function resizeCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function drawChart(points) {
+  resizeCanvas();
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  const pad = { l: 44, r: 12, t: 12, b: 24 };
+  ctx.clearRect(0, 0, w, h);
+
+  if (!points.length) {
+    ctx.fillStyle = '#8ea0ac';
+    ctx.font = '13px sans-serif';
+    ctx.fillText('No data yet', pad.l, h / 2);
+    return;
+  }
+
+  const temps = [];
+  points.forEach(p => {
+    if (p.meat_c === p.meat_c) temps.push(p.meat_c);
+    if (p.grill_c === p.grill_c) temps.push(p.grill_c);
+  });
+  let minT = temps.length ? Math.min(...temps) : 0;
+  let maxT = temps.length ? Math.max(...temps) : 100;
+  if (maxT - minT < 10) { maxT += 5; minT -= 5; }
+  minT -= (maxT - minT) * 0.05;
+  maxT += (maxT - minT) * 0.05;
+
+  const t0 = points[0].uptime_s, t1 = points[points.length - 1].uptime_s;
+  const xScale = t => t1 === t0 ? pad.l : pad.l + (t - t0) / (t1 - t0) * (w - pad.l - pad.r);
+  const yScale = v => pad.t + (1 - (v - minT) / (maxT - minT)) * (h - pad.t - pad.b);
+
+  ctx.strokeStyle = '#2b333b';
+  ctx.fillStyle = '#8ea0ac';
+  ctx.font = '11px sans-serif';
+  ctx.lineWidth = 1;
+  const gridLines = 4;
+  for (let i = 0; i <= gridLines; i++) {
+    const v = minT + (maxT - minT) * i / gridLines;
+    const y = yScale(v);
+    ctx.beginPath();
+    ctx.moveTo(pad.l, y);
+    ctx.lineTo(w - pad.r, y);
+    ctx.stroke();
+    ctx.fillText(v.toFixed(0) + '°', 4, y + 4);
+  }
+
+  function drawLine(key, color) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    let started = false;
+    points.forEach(p => {
+      const v = p[key];
+      if (v !== v) { started = false; return; }
+      const x = xScale(p.uptime_s), y = yScale(v);
+      if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
+    });
+    ctx.stroke();
+  }
+
+  drawLine('meat_c', '#e07a1f');
+  drawLine('grill_c', '#d9433e');
+}
+
+async function refreshHistory() {
+  try {
+    const res = await fetch('/api/history');
+    const data = await res.json();
+    drawChart(data.points || []);
+  } catch (e) { /* keep last chart on transient failure */ }
+}
+
+async function refreshScan() {
+  networksEl.innerHTML = '<li>Scanning&hellip;</li>';
+  try {
+    const res = await fetch('/api/scan');
+    const data = await res.json();
+    networksEl.innerHTML = '';
+    (data.networks || []).sort((a, b) => b.rssi - a.rssi).forEach(n => {
+      const li = document.createElement('li');
+      li.textContent = n.ssid + (n.secure ? ' 🔒' : '') + ' (' + n.rssi + ' dBm)';
+      li.addEventListener('click', () => { wifiForm.ssid.value = n.ssid; wifiForm.password.focus(); });
+      networksEl.appendChild(li);
+    });
+    if (!networksEl.children.length) networksEl.innerHTML = '<li>No networks found</li>';
+  } catch (e) {
+    networksEl.innerHTML = '<li>Scan failed</li>';
+  }
+}
+
+wifiForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  wifiMsg.textContent = 'Connecting…';
+  try {
+    const res = await fetch('/api/wifi', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ssid: wifiForm.ssid.value, password: wifiForm.password.value })
+    });
+    const data = await res.json();
+    wifiMsg.textContent = data.result === 'connecting'
+      ? 'Attempting to connect… this page keeps working via the setup AP until it succeeds.'
+      : 'Could not save network.';
+  } catch (e) {
+    wifiMsg.textContent = 'Request failed.';
+  }
+});
+
+document.getElementById('rescan').addEventListener('click', refreshScan);
+window.addEventListener('resize', () => refreshHistory());
+
+refreshStatus();
+refreshHistory();
+setInterval(refreshStatus, 3000);
+setInterval(refreshHistory, 30000);
+
+fetch('/api/status').then(r => r.json()).then(s => { if (s.ap_mode) refreshScan(); });
+</script>
+</body>
+</html>
