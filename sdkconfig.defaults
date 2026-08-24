@@ -1,0 +1,2 @@
+# Project sdkconfig defaults for esp32_smoker
+# Target and toolchain: ESP-IDF v5.5.3
