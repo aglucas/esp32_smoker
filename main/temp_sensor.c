@@ -1,4 +1,5 @@
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -15,16 +16,18 @@
 
 static const char *TAG = "temp_sensor";
 
-static adc_oneshot_unit_handle_t s_adc_handle;
-static adc_cali_handle_t s_cali_a, s_cali_b;
-static bool s_cali_a_ok = false, s_cali_b_ok = false;
+static const probe_config_t s_probes[NUM_PROBES] = PROBE_TABLE;
 
-static float s_current_meat_c = NAN, s_current_grill_c = NAN;
+static adc_oneshot_unit_handle_t s_adc_handle;
+static adc_cali_handle_t s_cali[NUM_PROBES];
+static bool s_cali_ok[NUM_PROBES];
+
+static probe_reading_t s_current[NUM_PROBES];
 static SemaphoreHandle_t s_current_mutex;
 
-static temp_point_t s_history[HISTORY_POINTS];
-static size_t s_history_count = 0;
-static size_t s_history_head = 0; // index to write next
+static hist_entry_t s_history[HISTORY_LEN];
+static uint32_t s_history_count = 0;
+static uint32_t s_history_head = 0; // index to write next
 static SemaphoreHandle_t s_history_mutex;
 
 static bool adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle)
@@ -70,43 +73,48 @@ static bool adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_att
     return calibrated;
 }
 
-static float resistance_to_celsius(float r_ohms)
-{
-    float t_kelvin = 1.0f / (1.0f / THERMISTOR_T25_KELVIN +
-                              (1.0f / THERMISTOR_BETA) * logf(r_ohms / THERMISTOR_R25_OHMS));
-    return t_kelvin - 273.15f;
-}
-
-static float read_probe_celsius(adc_channel_t channel, adc_cali_handle_t cali, bool cali_ok)
+static float read_mv(int probe)
 {
     int64_t sum_mv = 0;
     int valid = 0;
     for (int i = 0; i < ADC_SAMPLE_COUNT; i++) {
         int raw = 0;
-        if (adc_oneshot_read(s_adc_handle, channel, &raw) != ESP_OK) {
+        if (adc_oneshot_read(s_adc_handle, s_probes[probe].channel, &raw) != ESP_OK) {
             continue;
         }
         int mv = 0;
-        if (cali_ok) {
-            if (adc_cali_raw_to_voltage(cali, raw, &mv) != ESP_OK) {
+        if (s_cali_ok[probe]) {
+            if (adc_cali_raw_to_voltage(s_cali[probe], raw, &mv) != ESP_OK) {
                 continue;
             }
         } else {
-            mv = (int)(raw * 3300.0f / 4095.0f);
+            mv = (int)(raw * VSUPPLY_MV / 4095.0f);
         }
         sum_mv += mv;
         valid++;
     }
-    if (valid == 0) {
-        return NAN;
-    }
-    float mv = (float)sum_mv / valid;
+    return valid ? (float)sum_mv / valid : NAN;
+}
 
-    if (mv <= 1.0f || mv >= 3299.0f) {
-        return NAN; // open circuit or shorted probe
+// Divider: 3V3 -- rRef -- node(ADC) -- probe -- GND
+static float mv_to_ohms(const probe_config_t *p, float mv)
+{
+    if (isnan(mv) || mv >= OPEN_MV) return -1;  // open / unplugged
+    if (mv <= SHORT_MV) return -2;               // shorted
+    return p->r_ref * mv / (VSUPPLY_MV - mv);
+}
+
+static float ohms_to_f(const probe_config_t *p, float r)
+{
+    double inv_t;
+    if (p->sh_c != 0) {
+        double ln_r = log(r);
+        inv_t = p->sh_a + p->sh_b * ln_r + p->sh_c * ln_r * ln_r * ln_r;
+    } else {
+        inv_t = 1.0 / (p->t0_c + 273.15) + log(r / p->r0) / p->beta;
     }
-    float r_ohms = THERMISTOR_SERIES_R_OHMS * (mv / (3300.0f - mv));
-    return resistance_to_celsius(r_ohms);
+    double c = 1.0 / inv_t - 273.15;
+    return c * 9.0 / 5.0 + 32.0;
 }
 
 esp_err_t temp_sensor_init(void)
@@ -121,68 +129,145 @@ esp_err_t temp_sensor_init(void)
 
     adc_oneshot_chan_cfg_t chan_cfg = {
         .bitwidth = ADC_BITWIDTH_DEFAULT,
-        .atten = ADC_ATTEN_DB_12,
+        .atten = ADC_ATTEN_DB_12,   // ~0-3.1 V input range
     };
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(s_adc_handle, PROBE_A_ADC_CHANNEL, &chan_cfg));
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(s_adc_handle, PROBE_B_ADC_CHANNEL, &chan_cfg));
-
-    s_cali_a_ok = adc_calibration_init(ADC_UNIT_1, PROBE_A_ADC_CHANNEL, ADC_ATTEN_DB_12, &s_cali_a);
-    s_cali_b_ok = adc_calibration_init(ADC_UNIT_1, PROBE_B_ADC_CHANNEL, ADC_ATTEN_DB_12, &s_cali_b);
-
+    for (int i = 0; i < NUM_PROBES; i++) {
+        ESP_ERROR_CHECK(adc_oneshot_config_channel(s_adc_handle, s_probes[i].channel, &chan_cfg));
+        s_cali_ok[i] = adc_calibration_init(ADC_UNIT_1, s_probes[i].channel, ADC_ATTEN_DB_12, &s_cali[i]);
+        s_current[i] = (probe_reading_t){ .temp_f = NAN, .ohms = -1, .mv = 0 };
+    }
     return ESP_OK;
+}
+
+const char *temp_sensor_probe_name(int probe)
+{
+    return s_probes[probe].name;
+}
+
+float temp_sensor_min_readable_f(int probe)
+{
+    const probe_config_t *p = &s_probes[probe];
+    return ohms_to_f(p, p->r_ref * OPEN_MV / (VSUPPLY_MV - OPEN_MV));
 }
 
 void temp_sensor_update_current(void)
 {
-    float meat = read_probe_celsius(PROBE_A_ADC_CHANNEL, s_cali_a, s_cali_a_ok);
-    float grill = read_probe_celsius(PROBE_B_ADC_CHANNEL, s_cali_b, s_cali_b_ok);
+    probe_reading_t r[NUM_PROBES];
+    for (int i = 0; i < NUM_PROBES; i++) {
+        r[i].mv = read_mv(i);
+        r[i].ohms = mv_to_ohms(&s_probes[i], r[i].mv);
+        r[i].temp_f = NAN;
+        if (r[i].ohms > 0) {
+            float f = ohms_to_f(&s_probes[i], r[i].ohms);
+            if (f >= -40 && f <= 750) {
+                r[i].temp_f = f;
+            }
+        }
+    }
 
     xSemaphoreTake(s_current_mutex, portMAX_DELAY);
-    s_current_meat_c = meat;
-    s_current_grill_c = grill;
+    memcpy(s_current, r, sizeof(s_current));
     xSemaphoreGive(s_current_mutex);
 }
 
-void temp_sensor_get_current(float *meat_c, float *grill_c)
+void temp_sensor_get_current(probe_reading_t out[NUM_PROBES])
 {
     xSemaphoreTake(s_current_mutex, portMAX_DELAY);
-    *meat_c = s_current_meat_c;
-    *grill_c = s_current_grill_c;
+    memcpy(out, s_current, sizeof(s_current));
     xSemaphoreGive(s_current_mutex);
 }
 
-void temp_sensor_record_point(temp_point_t *out)
+static uint32_t uptime_s(void)
 {
-    temp_point_t p;
-    temp_sensor_get_current(&p.meat_c, &p.grill_c);
-    p.uptime_s = (uint32_t)(esp_timer_get_time() / 1000000ULL);
-    p.unix_time = (int64_t)time(NULL);
+    return (uint32_t)(esp_timer_get_time() / 1000000);
+}
 
-    xSemaphoreTake(s_history_mutex, portMAX_DELAY);
-    s_history[s_history_head] = p;
-    s_history_head = (s_history_head + 1) % HISTORY_POINTS;
-    if (s_history_count < HISTORY_POINTS) {
+// Caller holds s_history_mutex.
+static void history_append_locked(const hist_entry_t *e)
+{
+    s_history[s_history_head] = *e;
+    s_history_head = (s_history_head + 1) % HISTORY_LEN;
+    if (s_history_count < HISTORY_LEN) {
         s_history_count++;
     }
-    xSemaphoreGive(s_history_mutex);
-
-    if (out) {
-        *out = p;
-    }
 }
 
-size_t temp_sensor_get_history(temp_point_t *out, size_t max_points)
+void temp_sensor_push_history(void)
+{
+    probe_reading_t r[NUM_PROBES];
+    temp_sensor_get_current(r);
+
+    hist_entry_t e;
+    time_t now = time(NULL);
+    e.t = now > UNIX_TIME_VALID ? (uint32_t)now : uptime_s();
+    for (int i = 0; i < NUM_PROBES; i++) {
+        e.v[i] = isnan(r[i].temp_f) ? NO_DATA : (int16_t)lroundf(r[i].temp_f * 10);
+    }
+
+    xSemaphoreTake(s_history_mutex, portMAX_DELAY);
+    history_append_locked(&e);
+    xSemaphoreGive(s_history_mutex);
+}
+
+void temp_sensor_reset_history(void)
 {
     xSemaphoreTake(s_history_mutex, portMAX_DELAY);
-    size_t count = s_history_count;
-    if (count > max_points) {
-        count = max_points;
+    s_history_count = 0;
+    s_history_head = 0;
+    xSemaphoreGive(s_history_mutex);
+    temp_sensor_push_history();
+}
+
+void temp_sensor_history_time_synced(uint32_t unix_now, uint32_t uptime_now,
+                                     const hist_entry_t *restored, size_t n_restored)
+{
+    uint32_t boot_unix = unix_now - uptime_now;
+
+    xSemaphoreTake(s_history_mutex, portMAX_DELAY);
+    // Pull out this boot's samples, converting since-boot stamps to unix.
+    uint32_t count = s_history_count;
+    hist_entry_t *cur = malloc(sizeof(hist_entry_t) * (count ? count : 1));
+    if (!cur) {
+        xSemaphoreGive(s_history_mutex);
+        ESP_LOGW(TAG, "No memory to restore graph history");
+        return;
     }
-    size_t oldest = (s_history_head + HISTORY_POINTS - s_history_count) % HISTORY_POINTS;
-    size_t skip = s_history_count - count; // if truncated, keep the newest `count` points
-    size_t start = (oldest + skip) % HISTORY_POINTS;
-    for (size_t i = 0; i < count; i++) {
-        out[i] = s_history[(start + i) % HISTORY_POINTS];
+    uint32_t oldest = (s_history_head + HISTORY_LEN - count) % HISTORY_LEN;
+    for (uint32_t k = 0; k < count; k++) {
+        cur[k] = s_history[(oldest + k) % HISTORY_LEN];
+        if (cur[k].t < UNIX_TIME_VALID) {
+            cur[k].t += boot_unix;
+        }
+    }
+
+    // Rebuild: restored rows (only those from before this boot and within
+    // the graph window), then this boot's samples. The ring drops the oldest
+    // if it overflows.
+    s_history_count = 0;
+    s_history_head = 0;
+    uint32_t window_start = unix_now - HISTORY_HOURS * 3600;
+    size_t used = 0;
+    for (size_t i = 0; i < n_restored; i++) {
+        if (restored[i].t >= window_start && restored[i].t < boot_unix) {
+            history_append_locked(&restored[i]);
+            used++;
+        }
+    }
+    for (uint32_t k = 0; k < count; k++) {
+        history_append_locked(&cur[k]);
+    }
+    xSemaphoreGive(s_history_mutex);
+    free(cur);
+    ESP_LOGI(TAG, "Clock synced: graph restored %u points from the flash log", (unsigned)used);
+}
+
+size_t temp_sensor_get_history(hist_entry_t *out)
+{
+    xSemaphoreTake(s_history_mutex, portMAX_DELAY);
+    uint32_t count = s_history_count;
+    uint32_t oldest = (s_history_head + HISTORY_LEN - count) % HISTORY_LEN;
+    for (uint32_t k = 0; k < count; k++) {
+        out[k] = s_history[(oldest + k) % HISTORY_LEN];
     }
     xSemaphoreGive(s_history_mutex);
     return count;

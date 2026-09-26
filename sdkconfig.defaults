@@ -1,2 +1,18 @@
 # Project sdkconfig defaults for esp32_smoker
-# Target and toolchain: ESP-IDF v5.5.3
+# Target and toolchain: ESP-IDF v5.5.3, Seeed Studio XIAO ESP32C3
+CONFIG_IDF_TARGET="esp32c3"
+
+# XIAO ESP32C3 has 4 MB of flash.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# partitions.csv: 1.5 MB app (HTTPS alerts don't fit in the default 1 MB)
+# plus a ~2.4 MB LittleFS "storage" partition for the temperature log.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Main loop formats floats for logging/alerts.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
+
+# The XIAO's USB-C port is the C3's built-in USB Serial/JTAG, so send the
+# log console there (this also leaves the UART0 pins free).
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y

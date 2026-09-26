@@ -1,245 +1,533 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ESP32 Smoker</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Smoker</title>
+<!-- Fully self-contained (no CDN) so it also works on the offline setup AP. -->
 <style>
-  :root {
-    --bg:#14181c; --panel:#1e242b; --text:#e8edf2; --muted:#8ea0ac;
-    --meat:#e07a1f; --grill:#d9433e; --accent:#3fa9f5; --ok:#3fbf6f; --border:#2b333b;
-  }
-  * { box-sizing:border-box; }
-  body { margin:0; font-family:-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text); }
-  header { padding:16px 20px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; }
-  header h1 { font-size:18px; margin:0; }
-  #status { font-size:13px; color:var(--muted); }
-  #status.ok { color:var(--ok); }
-  main { max-width:900px; margin:0 auto; padding:16px 20px 60px; }
-  .readouts { display:flex; gap:16px; margin-bottom:20px; flex-wrap:wrap; }
-  .card { flex:1; min-width:160px; background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:16px; }
-  .card .label { font-size:13px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
-  .card .value { font-size:38px; font-weight:600; margin-top:6px; }
-  .card.meat .value { color:var(--meat); }
-  .card.grill .value { color:var(--grill); }
-  #chartWrap { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:12px; }
-  canvas { width:100%; height:320px; display:block; }
-  .legend { display:flex; gap:16px; font-size:13px; color:var(--muted); margin-top:8px; }
-  .legend span::before { content:""; display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; }
-  .legend .meat::before { background:var(--meat); }
-  .legend .grill::before { background:var(--grill); }
-  #wifiPanel { margin-top:24px; background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:16px; display:none; }
-  #wifiPanel h2 { margin-top:0; font-size:16px; }
-  #networks { list-style:none; padding:0; margin:0 0 12px; max-height:200px; overflow-y:auto; }
-  #networks li { display:flex; justify-content:space-between; align-items:center; padding:8px 4px; border-bottom:1px solid var(--border); cursor:pointer; }
-  #networks li:hover { background:#232b33; }
-  form#wifiForm { display:flex; gap:8px; flex-wrap:wrap; }
-  input { background:#0f1317; border:1px solid var(--border); color:var(--text); padding:8px 10px; border-radius:6px; }
-  #wifiForm input[name="ssid"] { flex:1; min-width:140px; }
-  button { background:var(--accent); color:#08131c; border:none; padding:8px 14px; border-radius:6px; font-weight:600; cursor:pointer; }
-  button.secondary { background:transparent; border:1px solid var(--border); color:var(--text); }
-  #wifiMsg { font-size:13px; color:var(--muted); margin-top:8px; }
+:root{--bg:#141210;--card:#1f1b18;--line:#342e29;--text:#f2ebe4;--dim:#a39686;--accent:#ff6b35;--bad:#ff4d4d;--good:#5bd98c}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.4 system-ui,-apple-system,sans-serif}
+main{max-width:960px;margin:0 auto;padding:16px}
+header{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:4px 12px;margin-bottom:12px}
+h1{font-size:20px;margin:0}
+h1 span{color:var(--accent)}
+.status{color:var(--dim);font-size:13px}
+#statusWrap{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+#statusWrap button{padding:4px 10px;font-size:12px}
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;border-top:4px solid var(--c)}
+.name{color:var(--dim);font-size:13px;text-transform:uppercase;letter-spacing:.06em}
+.temp{font-size:44px;font-weight:700;font-variant-numeric:tabular-nums;margin:2px 0}
+.temp small{font-size:18px;color:var(--dim);font-weight:400}
+.temp.alarm{color:var(--bad)}
+.temp.done{color:var(--good)}
+label{white-space:nowrap;display:flex;justify-content:space-between;align-items:center;gap:8px;color:var(--dim);font-size:13px;margin-top:6px}
+input{background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px;font-size:15px}
+input[type=number]{width:80px}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-top:12px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between}
+button{background:var(--line);color:var(--text);border:0;border-radius:8px;padding:8px 12px;font-size:14px;cursor:pointer}
+button.on,button.primary{background:var(--accent);color:#1a0d05;font-weight:600}
+button.danger{background:var(--bad);color:#fff;font-weight:600}
+.chartbox{position:relative;height:320px;margin-top:8px}
+#chart{width:100%;height:100%;display:block;touch-action:pan-y}
+#legend{display:flex;flex-wrap:wrap;gap:12px;font-size:13px;margin-top:6px;color:var(--dim)}
+#legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px}
+#readout{position:absolute;top:6px;left:56px;font-size:12px;background:#000a;padding:4px 8px;border-radius:6px;pointer-events:none;display:none;white-space:nowrap}
+.hit{margin-top:8px;padding-top:8px;border-top:1px solid var(--line);color:var(--good);font-size:13px;font-weight:600}
+.hit.miss{color:var(--bad)}
+.hit.off{color:var(--dim);font-weight:400}
+#msg,#wifiMsg,#ntfyMsg{color:var(--dim);font-size:13px}
+#wifiPanel,#ntfyPanel{display:none}
+#wifiPanel h2,#ntfyPanel h2{font-size:16px;margin:0 0 6px}
+#ntfyForm{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 8px}
+#ntfyForm input[type=url],#ntfyForm input[type=text]{flex:1;min-width:160px}
+#ntfyForm label.chk{width:100%;justify-content:flex-start;margin:0;color:var(--text);font-size:15px}
+#ntfySub a{color:var(--accent)}
+button.small{padding:3px 10px;font-size:12px}
+.planbar{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.planbar select,.planbar input{flex:1;min-width:140px}
+select{background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px;font-size:15px}
+.steps{display:grid;gap:6px;margin-top:10px}
+/* Columns: # | name | min | action | target | remove */
+.step{display:grid;grid-template-columns:22px 1.2fr 72px 1.6fr 80px 34px;gap:6px;align-items:center;padding:2px 4px;border-radius:8px}
+.step input{width:100%;min-width:0}
+.step.head{color:var(--dim);font-size:12px}
+.step .num{color:var(--dim);font-size:13px;text-align:center}
+.step.cur{background:#ff6b3526;outline:1px solid var(--accent)}
+.step.cur .num{color:var(--accent);font-weight:700}
+#planMsg{margin-top:6px}
+/* Phones: action moves to its own line under name/min/target. */
+@media(max-width:600px){.step{grid-template-columns:22px 1fr 60px 64px 34px}.step .act{order:1;grid-column:2/-1}.step.head .act{display:none}}
+#networks{list-style:none;padding:0;margin:8px 0 12px;max-height:200px;overflow-y:auto}
+#networks li{padding:10px 4px;border-bottom:1px solid var(--line);cursor:pointer}
+#networks li:hover{background:var(--line)}
+#wifiForm{display:flex;flex-wrap:wrap;gap:8px}
+#wifiForm input{flex:1;min-width:140px}
+/* Phones: pit card full width on top, the two meat probes side by side below. */
+@media(max-width:600px){.cards{grid-template-columns:1fr 1fr}.card:first-child{grid-column:1/-1}
+  .card:first-child .pitrow{display:flex;flex-wrap:wrap;gap:0 12px}.card:first-child .pitrow label{flex:1 1 90px}}
+@media(max-width:420px){.card{padding:12px}.temp{font-size:38px}input[type=number]{width:58px}.chartbox{height:260px}}
 </style>
 </head>
-<body>
+<body><main>
 <header>
-  <h1>ESP32 Smoker</h1>
-  <div id="status">connecting&hellip;</div>
+  <h1><span>&#9832;</span> Smoker</h1>
+  <div id="statusWrap">
+    <div class="status" id="status">connecting…</div>
+    <button type="button" id="changeNetworkBtn" style="display:none">Change network</button>
+  </div>
 </header>
-<main>
-  <div class="readouts">
-    <div class="card meat">
-      <div class="label">Probe A &middot; Meat</div>
-      <div class="value" id="meatVal">--.-&deg;C</div>
-    </div>
-    <div class="card grill">
-      <div class="label">Probe B &middot; Grill</div>
-      <div class="value" id="grillVal">--.-&deg;C</div>
-    </div>
-  </div>
 
-  <div id="chartWrap">
-    <canvas id="chart"></canvas>
-    <div class="legend"><span class="meat">Meat</span><span class="grill">Grill</span></div>
-  </div>
+<div class="cards" id="cards"></div>
 
-  <div id="wifiPanel">
-    <h2>Wi-Fi Setup</h2>
-    <p style="color:var(--muted); font-size:13px;">No known network is reachable, so this device is broadcasting its own access point. Pick a network below and enter its password to connect the smoker to your Wi-Fi.</p>
-    <ul id="networks"></ul>
-    <form id="wifiForm">
-      <input type="text" name="ssid" placeholder="Network name" required>
-      <input type="password" name="password" placeholder="Password">
-      <button type="submit">Connect</button>
-      <button type="button" class="secondary" id="rescan">Rescan</button>
-    </form>
-    <div id="wifiMsg"></div>
+<div class="panel">
+  <div class="row"><strong>History</strong>
+    <div id="win"><button data-h="1">1h</button> <button data-h="3" class="on">3h</button> <button data-h="6">6h</button> <button data-h="12">12h</button></div>
   </div>
+  <div class="chartbox"><canvas id="chart"></canvas><div id="readout"></div></div>
+  <div id="legend"></div>
+</div>
+
+<div class="panel row">
+  <label style="margin:0"><input type="checkbox" id="alertsOn"> Alerts enabled</label>
+  <div><button id="test">Send test alert</button> <button class="primary" id="save">Save settings</button></div>
+  <div class="status" style="width:100%">Notifications: <span id="ntfyInfo">…</span> <button type="button" id="ntfyChange" class="small">Change</button></div>
+  <div id="msg" style="width:100%"></div>
+</div>
+
+<div class="panel" id="ntfyPanel">
+  <h2>ntfy notifications</h2>
+  <div class="status">Install the ntfy app on your phone and subscribe to this topic on the same server. Anyone who knows the topic can read your alerts, so keep it hard to guess (tap Random).</div>
+  <form id="ntfyForm">
+    <label class="chk"><input type="checkbox" name="enabled"> Send alerts with ntfy</label>
+    <input type="url" name="server" placeholder="https://ntfy.sh" required>
+    <input type="text" name="topic" placeholder="Topic" required maxlength="64" pattern="[A-Za-z0-9_\-]+" title="Letters, numbers, - and _ only" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <button type="button" id="ntfyGen">Random</button>
+    <button type="submit" class="primary">Save</button>
+    <button type="button" id="ntfyCancel">Cancel</button>
+  </form>
+  <div class="status" id="ntfySub"></div>
+  <div id="ntfyMsg"></div>
+</div>
+
+<div class="panel row">
+  <div><strong>Data log</strong> <span class="status" id="logInfo"></span></div>
+  <div><a href="/api/log.csv" download="smoker_log.csv"><button type="button">Download CSV</button></a> <button type="button" class="danger" id="newRec">Start new recording</button></div>
+  <div id="logMsg" class="status" style="width:100%"></div>
+</div>
+
+<div class="panel" id="planPanel">
+  <div class="row"><strong>Cook steps</strong> <span class="status" id="planStatus"></span></div>
+  <div class="planbar">
+    <select id="planSel" aria-label="Plan"></select>
+    <input type="text" id="planName" placeholder="Plan name" maxlength="40" aria-label="Plan name">
+    <button type="button" id="planNew">New</button>
+    <button type="button" id="planDel">Delete</button>
+  </div>
+  <div class="steps" id="steps"></div>
+  <div class="row" style="margin-top:8px">
+    <div><button type="button" id="stepAdd">+ Add step</button> <span class="status" id="planTotal"></span></div>
+    <div><button type="button" class="primary" id="planSave">Save plans</button></div>
+  </div>
+  <div class="row" style="margin-top:8px">
+    <div class="status">Start sends step 1's alert now and each next step's alert when the previous step's time is up.</div>
+    <div><button type="button" class="primary" id="planStart">Start</button> <button type="button" class="danger" id="planStop" style="display:none">Stop</button></div>
+  </div>
+  <div id="planMsg" class="status"></div>
+</div>
+
+<div class="panel" id="wifiPanel">
+  <h2>Wi-Fi setup</h2>
+  <div class="status" id="wifiHint"></div>
+  <ul id="networks"></ul>
+  <form id="wifiForm">
+    <input type="text" name="ssid" placeholder="Network name" required>
+    <input type="password" name="password" placeholder="Password">
+    <button type="submit" class="primary">Connect</button>
+    <button type="button" id="rescan">Rescan</button>
+    <button type="button" id="wifiCancel" style="display:none">Cancel</button>
+  </form>
+  <div id="wifiMsg"></div>
+</div>
 </main>
 
 <script>
-const statusEl = document.getElementById('status');
-const meatVal = document.getElementById('meatVal');
-const grillVal = document.getElementById('grillVal');
-const wifiPanel = document.getElementById('wifiPanel');
-const networksEl = document.getElementById('networks');
-const wifiForm = document.getElementById('wifiForm');
-const wifiMsg = document.getElementById('wifiMsg');
-const canvas = document.getElementById('chart');
-const ctx = canvas.getContext('2d');
+const COLORS=['#ff6b35','#4ecdc4','#ffd166','#c77dff'];
+const GREEN='#5bd98c',RED='#ff4d4d';   // pit target / pit alarm lines on the graph
+let names=[],winH=3,settingsLoaded=false,histData=null,manualWifiOpen=false,scanned=false;
+const $=id=>document.getElementById(id);
+const esc=s=>String(s).replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';');
 
-function fmtTemp(c) {
-  if (c === null || c === undefined || Number.isNaN(c)) return '--.-°C';
-  return c.toFixed(1) + '°C';
+function buildCards(p){
+  $('cards').innerHTML=p.map((x,i)=>`
+   <div class="card" style="--c:${COLORS[i%COLORS.length]}">
+    <div class="name">${esc(x.name)}</div>
+    <div class="temp" id="t${i}">--</div>
+    ${i==0?`<div class="pitrow"><label>Low <input type="number" inputmode="numeric" id="pitLow"></label>
+            <label>Target <input type="number" inputmode="numeric" id="pitTarget"></label>
+            <label>High <input type="number" inputmode="numeric" id="pitHigh"></label></div>
+            <label title="How long the pit must stay below Low before the alert is sent (0 = right away)">Low alarm delay (sec) <input type="number" inputmode="numeric" min="0" max="3600" id="pitLowDelay"></label>`
+          :`<label>Target <input type="number" inputmode="numeric" id="tg${i}"></label>`}
+    <div class="status" id="s${i}"></div>
+    ${i>0?`<div class="hit" id="h${i}"></div>`:''}
+   </div>`).join('');
 }
 
-async function refreshStatus() {
-  try {
-    const res = await fetch('/api/status');
-    const s = await res.json();
-    meatVal.textContent = fmtTemp(s.meat_c);
-    grillVal.textContent = fmtTemp(s.grill_c);
+function showWifiPanel(d){
+  const panel=$('wifiPanel');
+  if(d.apMode){
+    $('wifiHint').textContent='No known network is reachable, so the smoker is broadcasting its own network ("'+d.ssid+'"). Pick your Wi-Fi below and enter its password. Alerts need internet, so they are off until it connects.';
+    $('changeNetworkBtn').style.display='none';$('wifiCancel').style.display='none';
+    panel.style.display='block';
+    if(!scanned){scanned=true;refreshScan();}
+  }else{
+    $('wifiHint').textContent='Pick a different network and enter its password to switch the smoker over.';
+    $('changeNetworkBtn').style.display=d.staConnected?'inline-block':'none';
+    $('wifiCancel').style.display=manualWifiOpen?'inline-block':'none';
+    panel.style.display=manualWifiOpen?'block':'none';
+  }
+}
 
-    if (s.ap_mode) {
-      statusEl.textContent = 'Setup mode · AP "' + s.ssid + '"';
-      statusEl.className = '';
-      wifiPanel.style.display = 'block';
-    } else if (s.sta_connected) {
-      statusEl.textContent = 'Connected to ' + s.ssid + ' (' + s.ip + ')';
-      statusEl.className = 'ok';
-      wifiPanel.style.display = 'none';
-    } else {
-      statusEl.textContent = 'Connecting…';
-      statusEl.className = '';
+async function loadNow(){
+  try{
+    const d=await (await fetch('/api/now')).json();
+    if(!names.length){
+      names=d.probes.map(p=>p.name);buildCards(d.probes);
+      ['pitLow','pitTarget','pitHigh'].forEach(id=>$(id).oninput=drawChart);   // preview lines while editing
     }
-  } catch (e) {
-    statusEl.textContent = 'Offline';
-    statusEl.className = '';
-  }
-}
-
-function resizeCanvas() {
-  const dpr = window.devicePixelRatio || 1;
-  const rect = canvas.getBoundingClientRect();
-  canvas.width = rect.width * dpr;
-  canvas.height = rect.height * dpr;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-}
-
-function drawChart(points) {
-  resizeCanvas();
-  const w = canvas.clientWidth, h = canvas.clientHeight;
-  const pad = { l: 44, r: 12, t: 12, b: 24 };
-  ctx.clearRect(0, 0, w, h);
-
-  if (!points.length) {
-    ctx.fillStyle = '#8ea0ac';
-    ctx.font = '13px sans-serif';
-    ctx.fillText('No data yet', pad.l, h / 2);
-    return;
-  }
-
-  const temps = [];
-  points.forEach(p => {
-    if (p.meat_c === p.meat_c) temps.push(p.meat_c);
-    if (p.grill_c === p.grill_c) temps.push(p.grill_c);
-  });
-  let minT = temps.length ? Math.min(...temps) : 0;
-  let maxT = temps.length ? Math.max(...temps) : 100;
-  if (maxT - minT < 10) { maxT += 5; minT -= 5; }
-  minT -= (maxT - minT) * 0.05;
-  maxT += (maxT - minT) * 0.05;
-
-  const t0 = points[0].uptime_s, t1 = points[points.length - 1].uptime_s;
-  const xScale = t => t1 === t0 ? pad.l : pad.l + (t - t0) / (t1 - t0) * (w - pad.l - pad.r);
-  const yScale = v => pad.t + (1 - (v - minT) / (maxT - minT)) * (h - pad.t - pad.b);
-
-  ctx.strokeStyle = '#2b333b';
-  ctx.fillStyle = '#8ea0ac';
-  ctx.font = '11px sans-serif';
-  ctx.lineWidth = 1;
-  const gridLines = 4;
-  for (let i = 0; i <= gridLines; i++) {
-    const v = minT + (maxT - minT) * i / gridLines;
-    const y = yScale(v);
-    ctx.beginPath();
-    ctx.moveTo(pad.l, y);
-    ctx.lineTo(w - pad.r, y);
-    ctx.stroke();
-    ctx.fillText(v.toFixed(0) + '°', 4, y + 4);
-  }
-
-  function drawLine(key, color) {
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    let started = false;
-    points.forEach(p => {
-      const v = p[key];
-      if (v !== v) { started = false; return; }
-      const x = xScale(p.uptime_s), y = yScale(v);
-      if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
+    if(!settingsLoaded){
+      $('pitLow').value=d.pitLow;$('pitHigh').value=d.pitHigh;$('alertsOn').checked=d.alertsOn;
+      $('pitLowDelay').value=d.pitLowDelay;
+      $('pitTarget').value=d.probes[0].target;
+      d.probes.forEach((p,i)=>{if(i)$('tg'+i).value=p.target});settingsLoaded=true;
+    }
+    d.probes.forEach((p,i)=>{
+      const el=$('t'+i);
+      el.innerHTML=p.temp==null?'--':Math.round(p.temp)+'<small>°F</small>';
+      el.className='temp';
+      if(p.temp!=null){
+        if(i==0&&((d.pitLow>0&&p.temp<d.pitLow)||(d.pitHigh>0&&p.temp>d.pitHigh)))el.classList.add('alarm');
+        if(i>0&&p.target>0&&p.temp>=p.target)el.classList.add('done');
+      }
+      // ohms -1 = divider reads open: unplugged OR too cold to read; -2 = shorted
+      const noTemp=p.ohms==-2?'probe shorted':p.ohms==-1?'below '+p.minTemp+'° or unplugged':'no probe';
+      let st='';
+      if(p.temp!=null&&p.target>0){
+        const diff=Math.round(p.temp-p.target);
+        st=i>0?(p.temp>=p.target?'Done!':-diff+'° to go')
+              :(Math.abs(diff)<=5?'On target ('+Math.round(p.target)+'°)':Math.abs(diff)+'° '+(diff>0?'above':'below')+' '+Math.round(p.target)+'° target');
+      }
+      $('s'+i).textContent=p.temp==null?noTemp:st;
+      // Latched on the device: red X until the target is hit, then green check
+      // that stays after the meat cools/rests or the probe is pulled, until
+      // this probe's target is changed.
+      if(i>0){
+        const h=$('h'+i);
+        if(p.target<=0){
+          h.textContent='– No target set';h.className='hit off';
+        }else if(p.hit){
+          h.textContent='✓ Hit '+Math.round(p.target)+'° target'+(p.hitAgo>=0?' at '+fmtT(Date.now()-p.hitAgo*1000):'');
+          h.className='hit';
+        }else{
+          h.textContent='✗ '+Math.round(p.target)+'° target not hit yet';h.className='hit miss';
+        }
+      }
     });
-    ctx.stroke();
+    let s=d.apMode?'Setup mode (no alerts) · ':(d.staConnected?d.ssid+' · ':'Wi-Fi connecting… · ');
+    s+='up '+Math.floor(d.uptime/3600)+'h '+Math.floor(d.uptime%3600/60)+'m';
+    if(d.lastAlert)s+=' · last alert: '+d.lastAlert;
+    $('status').textContent=s;
+    // ~50 bytes per 1-minute row
+    $('logInfo').textContent=d.logBytes==null?'· not available':
+      '· '+(d.logBytes<1024*1024?Math.round(d.logBytes/1024)+' KB':(d.logBytes/1048576).toFixed(1)+' MB')+
+      ' saved (~'+Math.round(d.logBytes/50/60)+' h of readings)';
+    showWifiPanel(d);
+    showNtfy(d.ntfy);
+    if(plans.length)showPlanStatus(d.plan);else planRun=d.plan;
+  }catch(e){$('status').textContent='connection lost…';}
+}
+
+async function loadHistory(){
+  try{histData=await (await fetch('/api/history')).json();histData.fetched=Date.now();drawChart();}catch(e){}
+}
+
+// ---- tiny self-contained line chart (no internet needed) ----
+let hoverX=null;
+const fmtT=t=>new Date(t).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
+function drawChart(){
+  if(!histData||!names.length)return;
+  const cv=$('chart'),dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=cv.clientHeight;
+  if(cv.width!=W*dpr||cv.height!=H*dpr){cv.width=W*dpr;cv.height=H*dpr;}
+  const g=cv.getContext('2d');g.setTransform(dpr,0,0,dpr,0,0);g.clearRect(0,0,W,H);
+  // Each row is [age_s, temps...]; placing by age keeps power-cut gaps as
+  // breaks in the line (pen lifts when points are > 2.5 steps apart).
+  const step=histData.interval*1000;
+  const now=Date.now(),minX=now-winH*3600e3;
+  const pts=histData.rows.map(r=>({x:histData.fetched-r[0]*1000,v:r.slice(1)})).filter(p=>p.x>=minX);
+  // Pit reference lines (from the inputs, so unsaved edits preview too).
+  const low=parseFloat($('pitLow').value),high=parseFloat($('pitHigh').value),tgt=parseFloat($('pitTarget').value);
+  const refs=[[low,RED,'low'],[high,RED,'high'],[tgt,GREEN,'target']].filter(r=>r[0]>0);
+  let lo=Infinity,hi=-Infinity;
+  pts.forEach(p=>p.v.forEach(v=>{if(v!=null){lo=Math.min(lo,v);hi=Math.max(hi,v);}}));
+  refs.forEach(r=>{lo=Math.min(lo,r[0]);hi=Math.max(hi,r[0]);});
+  if(!isFinite(lo)){lo=50;hi=250;}
+  const span=Math.max(20,hi-lo),yStep=span>200?50:span>80?25:10;
+  lo=Math.floor((lo-5)/yStep)*yStep;hi=Math.ceil((hi+5)/yStep)*yStep;
+  const L=46,R=10,T=10,B=26,pw=W-L-R,ph=H-T-B;
+  const X=t=>L+(t-minX)/(now-minX)*pw,Y=v=>T+(hi-v)/(hi-lo)*ph;
+  g.font='12px system-ui,sans-serif';g.lineWidth=1;
+  g.strokeStyle='#2a2521';g.fillStyle='#a39686';g.textAlign='right';g.textBaseline='middle';
+  for(let v=lo;v<=hi;v+=yStep){g.beginPath();g.moveTo(L,Y(v));g.lineTo(W-R,Y(v));g.stroke();g.fillText(v+'°',L-6,Y(v));}
+  g.textAlign='center';g.textBaseline='top';
+  const maxLabels=Math.max(2,Math.floor(pw/80));
+  const tStep=[5,10,15,30,60,120,180].map(m=>m*60e3).find(st=>(now-minX)/st<=maxLabels)||240*60e3;
+  for(let t=Math.ceil(minX/tStep)*tStep;t<=now;t+=tStep){g.fillText(fmtT(t),X(t),H-B+6);}
+  g.save();g.lineWidth=1.5;g.setLineDash([6,5]);g.textAlign='right';g.textBaseline='bottom';g.font='11px system-ui,sans-serif';
+  refs.forEach(([v,c,label])=>{g.strokeStyle=c;g.fillStyle=c;g.beginPath();g.moveTo(L,Y(v));g.lineTo(W-R,Y(v));g.stroke();
+    g.fillText('pit '+label+' '+Math.round(v)+'°',W-R-2,Y(v)-2);});
+  g.restore();
+  g.lineWidth=2;g.lineJoin='round';
+  names.forEach((_,p)=>{g.strokeStyle=COLORS[p%COLORS.length];g.beginPath();let pen=false,prev=null;
+    pts.forEach(q=>{const v=q.v[p];
+      if(v==null||(prev&&q.x-prev>step*2.5)){pen=false;}
+      if(v!=null){pen?g.lineTo(X(q.x),Y(v)):g.moveTo(X(q.x),Y(v));pen=true;prev=q.x;}});
+    g.stroke();});
+  // hover / touch readout
+  const ro=$('readout');
+  if(hoverX!=null&&pts.length){
+    const t=minX+(hoverX-L)/pw*(now-minX);
+    let best=pts[0];pts.forEach(q=>{if(Math.abs(q.x-t)<Math.abs(best.x-t))best=q;});
+    g.strokeStyle='#f2ebe455';g.lineWidth=1;g.beginPath();g.moveTo(X(best.x),T);g.lineTo(X(best.x),T+ph);g.stroke();
+    ro.innerHTML='<b>'+fmtT(best.x)+'</b> '+names.map((nm,p)=>best.v[p]==null?'':`<span style="color:${COLORS[p%COLORS.length]}">${esc(nm)} ${Math.round(best.v[p])}°</span>`).filter(Boolean).join(' · ');
+    ro.style.display='block';
+  }else ro.style.display='none';
+  $('legend').innerHTML=names.map((nm,p)=>`<span><i style="background:${COLORS[p%COLORS.length]}"></i>${esc(nm)}</span>`).join('')+
+    (tgt>0?`<span><i style="background:${GREEN}"></i>Pit target</span>`:'')+
+    (low>0||high>0?`<span><i style="background:${RED}"></i>Pit low / high alarm</span>`:'');
+}
+(()=>{const cv=$('chart');
+  const mv=e=>{const r=cv.getBoundingClientRect();const x=(e.touches?e.touches[0].clientX:e.clientX)-r.left;hoverX=x>=46?x:null;drawChart();};
+  cv.addEventListener('mousemove',mv);cv.addEventListener('touchmove',mv,{passive:true});cv.addEventListener('touchstart',mv,{passive:true});
+  cv.addEventListener('mouseleave',()=>{hoverX=null;drawChart();});
+  window.addEventListener('resize',drawChart);})();
+
+$('win').onclick=e=>{const h=e.target.dataset.h;if(!h)return;winH=+h;
+  document.querySelectorAll('#win button').forEach(b=>b.classList.toggle('on',b==e.target));drawChart();};
+
+$('save').onclick=async()=>{
+  const f=new URLSearchParams({alertsOn:$('alertsOn').checked?1:0,pitLow:$('pitLow').value||0,pitHigh:$('pitHigh').value||0,pitTarget:$('pitTarget').value||0,pitLowDelay:$('pitLowDelay').value||0});
+  names.forEach((_,i)=>{if(i)f.append('t'+i,$('tg'+i).value||0)});
+  try{
+    const d=await (await fetch('/api/settings',{method:'POST',body:f})).json();
+    $('msg').textContent=d.ok?'Saved.':'Save failed.';
+  }catch(e){$('msg').textContent='Save failed.';}
+  drawChart();
+};
+$('test').onclick=async()=>{
+  try{
+    const d=await (await fetch('/api/test',{method:'POST'})).json();
+    $('msg').textContent=d.ok?'Test alert sent — check your phone.':'Could not send: '+(d.why||'error');
+  }catch(e){$('msg').textContent='Could not send: request failed';}
+};
+
+$('newRec').onclick=async()=>{
+  if(!confirm('Start a new recording?\n\nThis deletes the saved log (download the CSV first to keep it), clears the graph, and resets the target-hit checks and alerts. Your settings are kept.'))return;
+  try{
+    const d=await (await fetch('/api/reset',{method:'POST'})).json();
+    $('logMsg').textContent=d.ok?'New recording started.':'Could not reset: '+(d.why||'error');
+  }catch(e){$('logMsg').textContent='Could not reset: request failed';}
+  hoverX=null;loadNow().then(loadHistory);
+};
+
+// ---- cook step plans ----
+let plans=[],planCur=0,planRun=null;
+const blankStep=()=>({name:'',min:60,action:'',temp:0});
+const fmtDur=s=>{const m=Math.max(1,Math.ceil(s/60)),h=Math.floor(m/60);return h?h+' h '+(m%60)+' min':m+' min';};
+
+async function loadPlans(){
+  try{
+    const d=await (await fetch('/api/plans')).json();
+    plans=d.plans||[];
+  }catch(e){plans=[];}
+  if(!plans.length)plans=[{name:'My plan',steps:[blankStep()]}];
+  planCur=Math.min(planCur,plans.length-1);
+  renderPlans();
+}
+function renderPlans(){
+  $('planSel').innerHTML=plans.map((p,i)=>`<option value="${i}"${i==planCur?' selected':''}>${esc(p.name||'(unnamed)')}</option>`).join('');
+  const p=plans[planCur];
+  $('planName').value=p.name;
+  $('steps').innerHTML='<div class="step head"><span></span><span>Step name</span><span>Min</span><span class="act">Action</span><span>Target °F</span><span></span></div>'+
+    p.steps.map((s,i)=>`<div class="step" data-i="${i}"><span class="num">${i+1}</span>
+      <input data-k="name" value="${esc(s.name)}" placeholder="Step name" maxlength="40" aria-label="Step ${i+1} name">
+      <input data-k="min" type="number" inputmode="numeric" min="1" max="1440" value="${s.min}" aria-label="Step ${i+1} minutes">
+      <input class="act" data-k="action" value="${esc(s.action)}" placeholder="Action" maxlength="80" aria-label="Step ${i+1} action">
+      <input data-k="temp" type="number" inputmode="numeric" min="0" max="999" value="${s.temp||''}" placeholder="–" aria-label="Step ${i+1} target temp">
+      <button type="button" class="small del" title="Remove step" aria-label="Remove step ${i+1}">×</button></div>`).join('');
+  updatePlanTotal();showPlanStatus();
+}
+function updatePlanTotal(){
+  const m=plans[planCur].steps.reduce((a,s)=>a+(+s.min||0),0);
+  $('planTotal').textContent=m?'Total '+fmtDur(m*60):'';
+}
+function showPlanStatus(p){
+  if(p!==undefined)planRun=p;
+  const r=planRun,running=r&&r.running;
+  $('planStop').style.display=running?'inline-block':'none';
+  $('planStart').textContent=running?'Restart':'Start';
+  let s='· not running';
+  if(running){
+    s='· running “'+r.name+'”: ';
+    if(r.waiting)s+='waiting for the clock after a restart…';
+    else if(r.step)s+='step '+r.step+'/'+r.steps+' “'+r.stepName+'”, '+fmtDur(r.stepLeft)+' left · all done at '+fmtT(Date.now()+r.totalLeft*1000);
   }
-
-  drawLine('meat_c', '#e07a1f');
-  drawLine('grill_c', '#d9433e');
+  $('planStatus').textContent=s;
+  // Highlight the current step when the running plan is the one shown.
+  const onShown=running&&r.step&&plans[planCur]&&plans[planCur].name===r.name;
+  document.querySelectorAll('#steps .step[data-i]').forEach(el=>el.classList.toggle('cur',onShown&&+el.dataset.i===r.step-1));
 }
-
-async function refreshHistory() {
-  try {
-    const res = await fetch('/api/history');
-    const data = await res.json();
-    drawChart(data.points || []);
-  } catch (e) { /* keep last chart on transient failure */ }
+$('steps').oninput=e=>{
+  const row=e.target.closest('.step[data-i]'),k=e.target.dataset.k;
+  if(!row||!k)return;
+  const v=k==='min'||k==='temp'?(+e.target.value||0):e.target.value;
+  plans[planCur].steps[+row.dataset.i][k]=v;
+  if(k==='min')updatePlanTotal();
+};
+$('steps').onclick=e=>{
+  const row=e.target.closest('.step[data-i]');
+  if(!row||!e.target.classList.contains('del'))return;
+  const st=plans[planCur].steps;
+  st.splice(+row.dataset.i,1);
+  if(!st.length)st.push(blankStep());
+  renderPlans();
+};
+$('stepAdd').onclick=()=>{
+  const st=plans[planCur].steps;
+  if(st.length>=12){$('planMsg').textContent='A plan can have at most 12 steps.';return;}
+  st.push(blankStep());renderPlans();
+};
+$('planSel').onchange=e=>{planCur=+e.target.value;$('planMsg').textContent='';renderPlans();};
+$('planName').oninput=e=>{plans[planCur].name=e.target.value;$('planSel').options[planCur].textContent=e.target.value||'(unnamed)';};
+$('planNew').onclick=()=>{
+  if(plans.length>=10){$('planMsg').textContent='At most 10 plans.';return;}
+  plans.push({name:'New plan '+(plans.length+1),steps:[blankStep()]});planCur=plans.length-1;renderPlans();
+  $('planMsg').textContent='New plan added. Press Save plans to keep it.';
+};
+$('planDel').onclick=()=>{
+  if(!confirm('Delete plan “'+plans[planCur].name+'”?'))return;
+  plans.splice(planCur,1);
+  if(!plans.length)plans.push({name:'My plan',steps:[blankStep()]});
+  planCur=0;renderPlans();
+  $('planMsg').textContent='Plan removed. Press Save plans to keep this change.';
+};
+async function savePlans(){
+  try{
+    const d=await (await fetch('/api/plans',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plans})})).json();
+    $('planMsg').textContent=d.ok?'Plans saved.':'Not saved: '+(d.why||'error');
+    return d.ok;
+  }catch(e){$('planMsg').textContent='Not saved: request failed';return false;}
 }
+$('planSave').onclick=savePlans;
+$('planStart').onclick=async()=>{
+  const p=plans[planCur];
+  if(planRun&&planRun.running&&!confirm('Stop “'+planRun.name+'” and start “'+p.name+'” from step 1?'))return;
+  if(!await savePlans())return;   // start runs the saved copy
+  try{
+    const d=await (await fetch('/api/plan/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:p.name})})).json();
+    $('planMsg').textContent=d.ok?'Started “'+p.name+'”. Step 1 alert sent.':'Could not start: '+(d.why||'error');
+  }catch(e){$('planMsg').textContent='Could not start: request failed';}
+  loadNow();
+};
+$('planStop').onclick=async()=>{
+  if(!confirm('Stop the running plan? No more step alerts will be sent.'))return;
+  try{await fetch('/api/plan/stop',{method:'POST'});$('planMsg').textContent='Plan stopped.';}
+  catch(e){$('planMsg').textContent='Could not stop: request failed';}
+  loadNow();
+};
 
-async function refreshScan() {
-  networksEl.innerHTML = '<li>Scanning&hellip;</li>';
-  try {
-    const res = await fetch('/api/scan');
-    const data = await res.json();
-    networksEl.innerHTML = '';
-    (data.networks || []).sort((a, b) => b.rssi - a.rssi).forEach(n => {
-      const li = document.createElement('li');
-      li.textContent = n.ssid + (n.secure ? ' 🔒' : '') + ' (' + n.rssi + ' dBm)';
-      li.addEventListener('click', () => { wifiForm.ssid.value = n.ssid; wifiForm.password.focus(); });
-      networksEl.appendChild(li);
-    });
-    if (!networksEl.children.length) networksEl.innerHTML = '<li>No networks found</li>';
-  } catch (e) {
-    networksEl.innerHTML = '<li>Scan failed</li>';
-  }
+// ---- ntfy setup ----
+let ntfyCfg=null;
+function showNtfy(n){
+  if(!n)return;
+  ntfyCfg=n;
+  $('ntfyInfo').textContent=n.enabled?'ntfy · '+n.topic:'ntfy is off';
 }
-
-wifiForm.addEventListener('submit', async (e) => {
+function updateNtfySub(){
+  const f=$('ntfyForm'),server=f.server.value.replace(/\/+$/,''),topic=f.topic.value;
+  $('ntfySub').innerHTML=server&&topic?'Subscribe: <a href="'+esc(server+'/'+topic)+'" target="_blank" rel="noopener">'+esc(server+'/'+topic)+'</a>':'';
+}
+$('ntfyChange').onclick=()=>{
+  if(!ntfyCfg)return;
+  const f=$('ntfyForm');
+  f.enabled.checked=ntfyCfg.enabled;f.server.value=ntfyCfg.server;f.topic.value=ntfyCfg.topic;
+  $('ntfyMsg').textContent='';updateNtfySub();
+  $('ntfyPanel').style.display='block';$('ntfyPanel').scrollIntoView({behavior:'smooth'});
+};
+$('ntfyCancel').onclick=()=>{$('ntfyPanel').style.display='none';};
+$('ntfyForm').server.oninput=$('ntfyForm').topic.oninput=updateNtfySub;
+$('ntfyGen').onclick=()=>{
+  const a=new Uint8Array(12),abc='abcdefghijklmnopqrstuvwxyz0123456789';
+  crypto.getRandomValues(a);
+  $('ntfyForm').topic.value='smoker-'+Array.from(a,b=>abc[b%36]).join('');
+  updateNtfySub();
+};
+$('ntfyForm').onsubmit=async e=>{
   e.preventDefault();
-  wifiMsg.textContent = 'Connecting…';
-  try {
-    const res = await fetch('/api/wifi', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ssid: wifiForm.ssid.value, password: wifiForm.password.value })
+  const f=$('ntfyForm');
+  $('ntfyMsg').textContent='Saving…';
+  try{
+    const d=await (await fetch('/api/ntfy',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({enabled:f.enabled.checked,server:f.server.value.trim(),topic:f.topic.value.trim()})})).json();
+    if(d.ok){
+      $('ntfyPanel').style.display='none';
+      $('msg').textContent='Notification settings saved. Tap "Send test alert" to check your phone.';
+      loadNow();
+    }else $('ntfyMsg').textContent='Not saved: '+(d.why||'error');
+  }catch(err){$('ntfyMsg').textContent='Request failed.';}
+};
+
+// ---- Wi-Fi setup ----
+async function refreshScan(){
+  const list=$('networks');
+  list.innerHTML='<li>Scanning…</li>';
+  try{
+    const d=await (await fetch('/api/scan')).json();
+    const nets=(d.networks||[]).filter(n=>n.ssid).sort((a,b)=>b.rssi-a.rssi);
+    list.innerHTML='';
+    nets.forEach(n=>{
+      const li=document.createElement('li');
+      li.textContent=n.ssid+(n.secure?' 🔒':'')+' ('+n.rssi+' dBm)';
+      li.onclick=()=>{$('wifiForm').ssid.value=n.ssid;$('wifiForm').password.focus();};
+      list.appendChild(li);
     });
-    const data = await res.json();
-    wifiMsg.textContent = data.result === 'connecting'
-      ? 'Attempting to connect… this page keeps working via the setup AP until it succeeds.'
-      : 'Could not save network.';
-  } catch (e) {
-    wifiMsg.textContent = 'Request failed.';
-  }
-});
+    if(!nets.length)list.innerHTML='<li>No networks found</li>';
+  }catch(e){list.innerHTML='<li>Scan failed</li>';}
+}
+$('wifiForm').onsubmit=async e=>{
+  e.preventDefault();
+  const form=$('wifiForm');
+  $('wifiMsg').textContent='Connecting…';
+  try{
+    const d=await (await fetch('/api/wifi',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ssid:form.ssid.value,password:form.password.value})})).json();
+    $('wifiMsg').textContent=d.result==='connecting'
+      ?(manualWifiOpen?'Switching… this page will drop; reopen http://smoker.local on the new network.'
+                      :'Connecting… once it joins, reconnect your phone to your Wi-Fi and open http://smoker.local.')
+      :'Could not save network.';
+  }catch(e){$('wifiMsg').textContent='Request failed.';}
+};
+$('rescan').onclick=refreshScan;
+$('changeNetworkBtn').onclick=()=>{manualWifiOpen=true;$('wifiPanel').style.display='block';
+  $('wifiCancel').style.display='inline-block';$('wifiMsg').textContent='';refreshScan();};
+$('wifiCancel').onclick=()=>{manualWifiOpen=false;$('wifiPanel').style.display='none';$('wifiCancel').style.display='none';};
 
-document.getElementById('rescan').addEventListener('click', refreshScan);
-window.addEventListener('resize', () => refreshHistory());
-
-refreshStatus();
-refreshHistory();
-setInterval(refreshStatus, 3000);
-setInterval(refreshHistory, 30000);
-
-fetch('/api/status').then(r => r.json()).then(s => { if (s.ap_mode) refreshScan(); });
+loadNow().then(loadHistory);
+loadPlans();
+setInterval(loadNow,3000);
+setInterval(loadHistory,30000);
 </script>
 </body>
 </html>

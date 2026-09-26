@@ -25,6 +25,7 @@ static const char *TAG = "wifi_mgr";
 static EventGroupHandle_t s_wifi_event_group;
 static int s_retry_num = 0;
 static bool s_ap_active = false;
+static bool s_defer_ap_fallback = false;
 static wifi_status_t s_status = {0};
 static SemaphoreHandle_t s_status_mutex;
 
@@ -54,7 +55,7 @@ static void event_handler(void *arg, esp_event_base_t event_base, int32_t event_
             ESP_LOGI(TAG, "retry connect to AP (%d/%d)", s_retry_num, WIFI_MAX_RETRY);
         } else {
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
-            if (!s_ap_active) {
+            if (!s_ap_active && !s_defer_ap_fallback) {
                 ESP_LOGW(TAG, "Giving up on station connection, starting fallback SoftAP");
                 start_ap();
             }
@@ -143,6 +144,35 @@ static void start_ap(void)
     ESP_LOGI(TAG, "SoftAP started: SSID=%s", ap_config.ap.ssid);
 }
 
+static bool try_connect_sta(const char *ssid, const char *password)
+{
+    wifi_config_t sta_config = {0};
+    strncpy((char *)sta_config.sta.ssid, ssid, sizeof(sta_config.sta.ssid) - 1);
+    strncpy((char *)sta_config.sta.password, password ? password : "", sizeof(sta_config.sta.password) - 1);
+    sta_config.sta.threshold.authmode = WIFI_AUTH_OPEN;
+
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_config));
+
+    xSemaphoreTake(s_status_mutex, portMAX_DELAY);
+    strncpy(s_status.ssid, ssid, sizeof(s_status.ssid) - 1);
+    xSemaphoreGive(s_status_mutex);
+
+    s_retry_num = 0;
+    xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
+
+    ESP_LOGI(TAG, "Connecting to '%s'...", ssid);
+    esp_wifi_connect();
+
+    EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+                                            pdFALSE, pdFALSE, pdMS_TO_TICKS(WIFI_CONNECT_TIMEOUT_MS));
+    if (bits & WIFI_CONNECTED_BIT) {
+        ESP_LOGI(TAG, "Connected to '%s'", ssid);
+        return true;
+    }
+    ESP_LOGW(TAG, "Could not connect to '%s' within timeout", ssid);
+    return false;
+}
+
 esp_err_t wifi_manager_start(void)
 {
     s_status_mutex = xSemaphoreCreateMutex();
@@ -157,41 +187,38 @@ esp_err_t wifi_manager_start(void)
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL));
 
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+    ESP_ERROR_CHECK(esp_wifi_start());
+
+    // Defer the disconnect handler's own AP fallback while we work through
+    // the candidate list below; we start the AP ourselves once (and only
+    // once) every candidate has been exhausted.
+    s_defer_ap_fallback = true;
+
+    // Skipped when no default network is set (no main/secrets.h).
+    if (DEFAULT_STA_SSID[0] && try_connect_sta(DEFAULT_STA_SSID, DEFAULT_STA_PASSWORD)) {
+        s_defer_ap_fallback = false;
+        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+        return ESP_OK;
+    }
+
     char ssid[33] = {0};
     char pass[65] = {0};
     bool have_creds = false;
     load_creds(ssid, sizeof(ssid), pass, sizeof(pass), &have_creds);
 
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
-    ESP_ERROR_CHECK(esp_wifi_start());
-
-    if (have_creds) {
-        wifi_config_t sta_config = {0};
-        strncpy((char *)sta_config.sta.ssid, ssid, sizeof(sta_config.sta.ssid) - 1);
-        strncpy((char *)sta_config.sta.password, pass, sizeof(sta_config.sta.password) - 1);
-        sta_config.sta.threshold.authmode = WIFI_AUTH_OPEN;
-
-        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_config));
-
-        xSemaphoreTake(s_status_mutex, portMAX_DELAY);
-        strncpy(s_status.ssid, ssid, sizeof(s_status.ssid) - 1);
-        xSemaphoreGive(s_status_mutex);
-
-        ESP_LOGI(TAG, "Connecting to saved network '%s'...", ssid);
-        esp_wifi_connect();
-
-        EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-                                                pdFALSE, pdFALSE, pdMS_TO_TICKS(WIFI_CONNECT_TIMEOUT_MS));
-        if (bits & WIFI_CONNECTED_BIT) {
-            ESP_LOGI(TAG, "Connected to '%s'", ssid);
+    if (have_creds && strcmp(ssid, DEFAULT_STA_SSID) != 0) {
+        if (try_connect_sta(ssid, pass)) {
+            s_defer_ap_fallback = false;
             ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
             return ESP_OK;
         }
-        ESP_LOGW(TAG, "Could not connect to '%s' within timeout, falling back to AP", ssid);
-    } else {
-        ESP_LOGI(TAG, "No saved network, starting fallback AP");
+    } else if (!have_creds) {
+        ESP_LOGI(TAG, "No saved network configured");
     }
 
+    ESP_LOGW(TAG, "No network reachable, starting fallback AP");
+    s_defer_ap_fallback = false;
     if (!s_ap_active) {
         start_ap();
     }
