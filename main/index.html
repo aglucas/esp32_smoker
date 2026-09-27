@@ -447,7 +447,7 @@ function showFan(f){
   if(f.mode==='off')note='Fan off';
   else if(f.mode==='manual')note='Manual';
   else if(f.note)note='Auto: fan off, '+f.note;
-  else{note='Auto: holding the pit target';terms='P '+f.p+'% · I '+f.i+'% · D '+f.d+'%';}
+  else{note='Auto: holding the pit target';terms='P '+Math.round(f.p)+'% · I '+Math.round(f.i)+'% · D '+Math.round(f.d)+'%';}
   if(f.highFor>=0&&f.alertPct>0&&f.alertMin>0)
     terms+=(terms?' · ':'')+'≥'+f.alertPct+'% for '+Math.floor(f.highFor/60)+' of '+f.alertMin+' min';
   $('fanNote').textContent=note;$('fanTerms').textContent=terms;

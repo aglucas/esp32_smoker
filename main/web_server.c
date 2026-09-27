@@ -195,9 +195,9 @@ static esp_err_t now_get_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(fj, "alertPct", fs.alert_pct);
     cJSON_AddNumberToObject(fj, "alertMin", fs.alert_min);
     cJSON_AddNumberToObject(fj, "highFor", fst.high_for_s);
-    cJSON_AddNumberToObject(fj, "p", roundf(fst.p * 10) / 10);
-    cJSON_AddNumberToObject(fj, "i", roundf(fst.i * 10) / 10);
-    cJSON_AddNumberToObject(fj, "d", roundf(fst.d * 10) / 10);
+    cJSON_AddNumberToObject(fj, "p", roundf(fst.p));
+    cJSON_AddNumberToObject(fj, "i", roundf(fst.i));
+    cJSON_AddNumberToObject(fj, "d", roundf(fst.d));
     cJSON_AddStringToObject(fj, "note", fst.note);
 
     cJSON *nj = cJSON_AddObjectToObject(root, "ntfy");
