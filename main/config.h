@@ -7,6 +7,9 @@
 // ---- Wi-Fi ----
 #define WIFI_CONNECT_TIMEOUT_MS   15000
 #define WIFI_MAX_RETRY            5
+// While running its own fallback network, try your Wi-Fi again this often
+// (one attempt each time, alternating secrets.h and the saved network).
+#define WIFI_RECONNECT_SEC        60
 
 // Default network to try before saved credentials / fallback AP. Set it in
 // main/secrets.h (copy secrets.h.example); that file is git-ignored so the

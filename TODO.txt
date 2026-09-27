@@ -1,0 +1,118 @@
+TODO: Over-the-air (OTA) firmware updates
+==========================================
+
+Goal: upload a new build (build/esp32_smoker.bin) from the web page instead
+of flashing over USB, with automatic rollback if the new firmware is bad.
+
+
+1. Partition table (partitions.csv) - two app slots, smaller log area
+---------------------------------------------------------------------
+Keep nvs and phy_init exactly where they are so Wi-Fi credentials and all
+saved settings survive the switch. App partitions must be 64 KB (0x10000)
+aligned.
+
+  # Name,   Type, SubType,  Offset,   Size
+  nvs,      data, nvs,      0x9000,   0x6000      (unchanged)
+  phy_init, data, phy,      0xf000,   0x1000      (unchanged)
+  ota_0,    app,  ota_0,    0x10000,  0x1B0000    (~1.69 MB)
+  ota_1,    app,  ota_1,    0x1C0000, 0x1B0000    (~1.69 MB)
+  otadata,  data, ota,      0x370000, 0x2000
+  storage,  data, littlefs, 0x372000, 0x8E000     (~568 KB)
+
+- App today is ~1.2 MB, so each slot has ~0.5 MB headroom.
+- Remove the "factory" partition.
+- Double-check the layout with:
+    python %IDF_PATH%\components\partition_table\gen_esp32part.py build\partition_table\partition-table.bin
+
+
+2. Log size: keep ~24 h instead of weeks
+----------------------------------------
+- A row (incl. fan_pct) is ~60 bytes, 1/min => ~86 KB per 24 h.
+- config.h: LOG_ROTATE_BYTES (1024 * 1024) -> (96 * 1024).
+  Two files => always >= 24 h kept, <= ~200 KB used.
+- Update the README (log keeps the last 24-48 h, not 2-4 weeks) and the
+  comment in config.h.
+- Graph restore only reads the last 12 h, so it is unaffected.
+- Flash wear at this size: worst case (24/7 logging) ~25 years; for normal
+  cooking use, effectively unlimited.
+
+
+3. GOTCHA: LittleFS "never auto-format" flag
+--------------------------------------------
+data_log.c only formats the storage partition if the NVS flag
+"smoker"/"log_fmt" is 0. NVS survives the partition change, so the flag will
+still be 1 while the storage partition has MOVED and is blank => mount fails
+and logging stays disabled.
+
+Fix: record which partition was formatted, e.g. save the storage
+partition's offset (esp_partition_t.address) instead of a 0/1 flag, and
+allow a format when the saved offset differs from the current one.
+
+
+4. Bootloader / sdkconfig
+-------------------------
+- sdkconfig.defaults: CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+  (keep CONFIG_PARTITION_TABLE_CUSTOM=y / partitions.csv).
+- The bootloader changes, so the switch needs one USB flash of everything
+  (idf.py -p PORT flash writes bootloader, partition table, otadata, app).
+- Optional: set a firmware version (PROJECT_VER in CMakeLists.txt or from
+  "git describe") so the page can show what is running.
+
+
+5. Firmware: upload endpoint (new module, e.g. main/ota_update.c)
+------------------------------------------------------------------
+- POST /api/ota (raw .bin in the request body):
+    esp_ota_get_next_update_partition(NULL)
+    esp_ota_begin(part, OTA_WITH_SEQUENTIAL_WRITES, &handle)
+    loop httpd_req_recv() in ~4 KB chunks -> esp_ota_write()
+    esp_ota_end()  (validates the image)
+    esp_ota_set_boot_partition(part)
+    reply {"ok":true}, then esp_restart() after ~1 s (esp_timer)
+  On any error: esp_ota_abort(), reply {"ok":false,"why":...}.
+- Raise httpd config.recv_wait_timeout (upload takes a while over Wi-Fi) and
+  check the httpd task stack is big enough; bump max_uri_handlers if needed.
+- Auth: require a password (e.g. OTA_PASSWORD in main/secrets.h, sent as a
+  header) so nobody else on the LAN can load firmware.
+- GET /api/now: add the running firmware version
+  (esp_app_get_description()->version) and which slot is running.
+
+
+6. Firmware: rollback safety
+----------------------------
+- After an update the new app boots in "pending verify" state.
+- Call esp_ota_mark_app_valid_cancel_rollback() once the app is healthy,
+  e.g. Wi-Fi started + web server running + ~60 s without a crash.
+- If it crashes or reboots before that, the bootloader switches back to the
+  previous slot automatically.
+- Log which slot booted and whether a rollback happened; maybe send an
+  alert "Firmware rolled back to <version>".
+
+
+7. Web page (index.html)
+------------------------
+- New "Firmware update" panel (near Data log): current version, file
+  picker for the .bin, password field, Upload button.
+- Use XMLHttpRequest (not fetch) to show upload progress %.
+- Warn before uploading if a cook plan is running or the fan is on: the
+  reboot takes ~5-10 s, during which the fan is off and nothing is measured.
+  (Afterwards the graph, plan timer and pit-low arm all restore.)
+- After "ok": show "Rebooting...", then poll /api/now until it answers and
+  show the new version.
+
+
+8. Migration steps (one time)
+-----------------------------
+1. Download the CSV log (it will be lost - the storage partition moves).
+2. Note/screenshot the cook plans (also lost). Consider adding a plans
+   export/import (download/upload plans.json) first.
+3. Build, then USB flash everything: idf.py -p PORT flash monitor
+4. Check: settings and Wi-Fi kept, log partition formatted, logging works.
+5. Test an OTA upload, then test rollback (e.g. upload a build that
+   deliberately never marks itself valid, and confirm it reverts).
+
+
+Alternatives considered
+-----------------------
+- ESP32 pulls updates from a URL (esp_https_ota, e.g. GitHub releases) with
+  an "Update now" button. More infrastructure; page upload is simpler for a
+  single smoker.
