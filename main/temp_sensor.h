@@ -30,10 +30,16 @@ typedef struct {
 // One graph point. `t` is unix seconds once the clock has synced; before that
 // it's seconds since boot. The two can't be confused: uptime never reaches
 // UNIX_TIME_VALID.
+#define FAN_NO_DATA           255
+
 typedef struct {
     uint32_t t;
     int16_t v[NUM_PROBES];   // temp F * 10, NO_DATA if no reading
+    uint8_t fan;             // fan output 0-100 %, FAN_NO_DATA if unknown
 } hist_entry_t;
+
+// Latest fan output (0-100 %), recorded with each graph point.
+void temp_sensor_set_fan_pct(float pct);
 
 esp_err_t temp_sensor_init(void);
 

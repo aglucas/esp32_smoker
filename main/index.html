@@ -32,12 +32,17 @@ button{background:var(--line);color:var(--text);border:0;border-radius:8px;paddi
 button.on,button.primary{background:var(--accent);color:#1a0d05;font-weight:600}
 button.danger{background:var(--bad);color:#fff;font-weight:600}
 .chartbox{position:relative;height:320px;margin-top:8px}
-#chart{width:100%;height:100%;display:block;touch-action:pan-y}
+#chart,#fanChart{width:100%;height:100%;display:block;touch-action:pan-y}
+/* Fan graph: half the temp graph's height, same time axis. */
+.fanbox{position:relative;height:160px;margin-top:6px;display:none}
 #legend{display:flex;flex-wrap:wrap;gap:12px;font-size:13px;margin-top:6px;color:var(--dim)}
 #legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px}
 #readout{position:absolute;top:6px;left:56px;font-size:12px;background:#000a;padding:4px 8px;border-radius:6px;pointer-events:none;display:none;white-space:nowrap}
 .hit{margin-top:8px;padding-top:8px;border-top:1px solid var(--line);color:var(--good);font-size:13px;font-weight:600}
 .hit.miss{color:var(--bad)}
+.hit.clickable{cursor:pointer}
+.hit .clr{float:right;color:var(--dim);font-weight:400;font-size:12px}
+.hit.clickable:hover .clr{color:var(--text)}
 .hit.off{color:var(--dim);font-weight:400}
 #msg,#wifiMsg,#ntfyMsg{color:var(--dim);font-size:13px}
 #wifiPanel,#ntfyPanel{display:none}
@@ -47,6 +52,11 @@ button.danger{background:var(--bad);color:#fff;font-weight:600}
 #ntfyForm label.chk{width:100%;justify-content:flex-start;margin:0;color:var(--text);font-size:15px}
 #ntfySub a{color:var(--accent)}
 button.small{padding:3px 10px;font-size:12px}
+.fanpct{font-size:24px;font-weight:700;color:#8ab4f8;margin-left:6px;font-variant-numeric:tabular-nums}
+.fanctl{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px 12px;margin-top:8px}
+/* Label text above each control, control full width underneath. */
+.fanctl label{flex-direction:column;align-items:stretch;justify-content:flex-start;gap:4px;margin:0;white-space:normal}
+.fanctl label input,.fanctl label select{width:100%}
 .planbar{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
 .planbar select,.planbar input{flex:1;min-width:140px}
 select{background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px;font-size:15px}
@@ -69,7 +79,7 @@ select{background:var(--bg);color:var(--text);border:1px solid var(--line);borde
 /* Phones: pit card full width on top, the two meat probes side by side below. */
 @media(max-width:600px){.cards{grid-template-columns:1fr 1fr}.card:first-child{grid-column:1/-1}
   .card:first-child .pitrow{display:flex;flex-wrap:wrap;gap:0 12px}.card:first-child .pitrow label{flex:1 1 90px}}
-@media(max-width:420px){.card{padding:12px}.temp{font-size:38px}input[type=number]{width:58px}.chartbox{height:260px}}
+@media(max-width:420px){.card{padding:12px}.temp{font-size:38px}input[type=number]{width:58px}.chartbox{height:260px}.fanbox{height:130px}}
 </style>
 </head>
 <body><main>
@@ -89,6 +99,7 @@ select{background:var(--bg);color:var(--text);border:1px solid var(--line);borde
   </div>
   <div class="chartbox"><canvas id="chart"></canvas><div id="readout"></div></div>
   <div id="legend"></div>
+  <div class="fanbox" id="fanBox"><canvas id="fanChart"></canvas></div>
 </div>
 
 <div class="panel row">
@@ -96,6 +107,21 @@ select{background:var(--bg);color:var(--text);border:1px solid var(--line);borde
   <div><button id="test">Send test alert</button> <button class="primary" id="save">Save settings</button></div>
   <div class="status" style="width:100%">Notifications: <span id="ntfyInfo">…</span> <button type="button" id="ntfyChange" class="small">Change</button></div>
   <div id="msg" style="width:100%"></div>
+</div>
+
+<div class="panel" id="fanPanel">
+  <div class="row"><div><strong>Fan</strong> <span class="fanpct" id="fanPct">--%</span></div> <span class="status" id="fanNote"></span></div>
+  <div class="fanctl">
+    <label>Mode <select id="fanMode"><option value="auto">Auto (PID)</option><option value="manual">Manual</option><option value="off">Off</option></select></label>
+    <label title="Fan % in Manual mode">Manual % <input type="number" inputmode="numeric" min="0" max="100" id="fanManual"></label>
+    <label title="% fan per °F below the pit target">Kp <input type="number" inputmode="decimal" step="0.1" min="0" id="fanKp"></label>
+    <label title="% fan per °F below target, per minute (0 = off)">Ki <input type="number" inputmode="decimal" step="0.01" min="0" id="fanKi"></label>
+    <label title="% fan less per °F/min the pit is rising (0 = off)">Kd <input type="number" inputmode="decimal" step="0.1" min="0" id="fanKd"></label>
+    <label title="Auto mode: send an alert if the fan stays at or above this % (0 = off)">Alert if fan ≥ % <input type="number" inputmode="numeric" min="0" max="100" id="fanAlertPct"></label>
+    <label title="...for this many minutes in a row (0 = off)">for (min) <input type="number" inputmode="numeric" min="0" max="1440" id="fanAlertMin"></label>
+  </div>
+  <div class="row" style="margin-top:8px"><div class="status" id="fanTerms"></div><button type="button" class="primary" id="fanSave">Save fan</button></div>
+  <div id="fanMsg" class="status"></div>
 </div>
 
 <div class="panel" id="ntfyPanel">
@@ -157,6 +183,8 @@ select{background:var(--bg);color:var(--text);border:1px solid var(--line);borde
 <script>
 const COLORS=['#ff6b35','#4ecdc4','#ffd166','#c77dff'];
 const GREEN='#5bd98c',RED='#ff4d4d';   // pit target / pit alarm lines on the graph
+const FAN='#8ab4f8';                   // fan % line (right-hand axis)
+let fanLoaded=false;
 let names=[],winH=3,settingsLoaded=false,histData=null,manualWifiOpen=false,scanned=false;
 const $=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';');
@@ -220,19 +248,21 @@ async function loadNow(){
         st=i>0?(p.temp>=p.target?'Done!':-diff+'° to go')
               :(Math.abs(diff)<=5?'On target ('+Math.round(p.target)+'°)':Math.abs(diff)+'° '+(diff>0?'above':'below')+' '+Math.round(p.target)+'° target');
       }
+      if(i==0&&d.fan)st+=(st?' · ':'')+'fan '+Math.round(d.fan.pct)+'%';
       $('s'+i).textContent=p.temp==null?noTemp:st;
       // Latched on the device: red X until the target is hit, then green check
       // that stays after the meat cools/rests or the probe is pulled, until
-      // this probe's target is changed.
+      // this probe's target is changed or the check is tapped to clear it.
       if(i>0){
         const h=$('h'+i);
         if(p.target<=0){
-          h.textContent='– No target set';h.className='hit off';
+          h.textContent='– No target set';h.className='hit off';h.title='';
         }else if(p.hit){
-          h.textContent='✓ Hit '+Math.round(p.target)+'° target'+(p.hitAgo>=0?' at '+fmtT(Date.now()-p.hitAgo*1000):'');
-          h.className='hit';
+          h.innerHTML='✓ Hit '+Math.round(p.target)+'° target'+(p.hitAgo>=0?' at '+fmtT(Date.now()-p.hitAgo*1000):'')+
+            ' <span class="clr">✕ clear</span>';
+          h.className='hit clickable';h.title='Tap to clear (e.g. new piece of meat)';
         }else{
-          h.textContent='✗ '+Math.round(p.target)+'° target not hit yet';h.className='hit miss';
+          h.textContent='✗ '+Math.round(p.target)+'° target not hit yet';h.className='hit miss';h.title='';
         }
       }
     });
@@ -246,6 +276,7 @@ async function loadNow(){
       ' saved (~'+Math.round(d.logBytes/50/60)+' h of readings)';
     showWifiPanel(d);
     showNtfy(d.ntfy);
+    showFan(d.fan);
     if(plans.length)showPlanStatus(d.plan);else planRun=d.plan;
   }catch(e){$('status').textContent='connection lost…';}
 }
@@ -257,16 +288,30 @@ async function loadHistory(){
 // ---- tiny self-contained line chart (no internet needed) ----
 let hoverX=null;
 const fmtT=t=>new Date(t).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
-function drawChart(){
-  if(!histData||!names.length)return;
-  const cv=$('chart'),dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=cv.clientHeight;
+// Both graphs use the same left/right margins so their time axes line up.
+const CL=46,CR=10;
+function sizeCanvas(cv){
+  const dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=cv.clientHeight;
   if(cv.width!=W*dpr||cv.height!=H*dpr){cv.width=W*dpr;cv.height=H*dpr;}
   const g=cv.getContext('2d');g.setTransform(dpr,0,0,dpr,0,0);g.clearRect(0,0,W,H);
-  // Each row is [age_s, temps...]; placing by age keeps power-cut gaps as
-  // breaks in the line (pen lifts when points are > 2.5 steps apart).
-  const step=histData.interval*1000;
+  return {g,W,H};
+}
+function drawTimeLabels(g,X,pw,minX,now,y){
+  g.textAlign='center';g.textBaseline='top';g.fillStyle='#a39686';
+  const maxLabels=Math.max(2,Math.floor(pw/80));
+  const tStep=[5,10,15,30,60,120,180].map(m=>m*60e3).find(st=>(now-minX)/st<=maxLabels)||240*60e3;
+  for(let t=Math.ceil(minX/tStep)*tStep;t<=now;t+=tStep)g.fillText(fmtT(t),X(t),y);
+}
+function drawChart(){
+  if(!histData||!names.length)return;
+  // Each row is [age_s, temps..., fan%]; placing by age keeps power-cut gaps
+  // as breaks in the line (pen lifts when points are > 2.5 steps apart).
+  const step=histData.interval*1000,np=names.length;
   const now=Date.now(),minX=now-winH*3600e3;
-  const pts=histData.rows.map(r=>({x:histData.fetched-r[0]*1000,v:r.slice(1)})).filter(p=>p.x>=minX);
+  const pts=histData.rows.map(r=>({x:histData.fetched-r[0]*1000,v:r.slice(1,1+np),fan:r[1+np]})).filter(p=>p.x>=minX);
+  const hasFan=pts.some(p=>p.fan!=null);
+
+  const {g,W,H}=sizeCanvas($('chart'));
   // Pit reference lines (from the inputs, so unsaved edits preview too).
   const low=parseFloat($('pitLow').value),high=parseFloat($('pitHigh').value),tgt=parseFloat($('pitTarget').value);
   const refs=[[low,RED,'low'],[high,RED,'high'],[tgt,GREEN,'target']].filter(r=>r[0]>0);
@@ -276,15 +321,12 @@ function drawChart(){
   if(!isFinite(lo)){lo=50;hi=250;}
   const span=Math.max(20,hi-lo),yStep=span>200?50:span>80?25:10;
   lo=Math.floor((lo-5)/yStep)*yStep;hi=Math.ceil((hi+5)/yStep)*yStep;
-  const L=46,R=10,T=10,B=26,pw=W-L-R,ph=H-T-B;
+  const L=CL,R=CR,T=10,B=26,pw=W-L-R,ph=H-T-B;
   const X=t=>L+(t-minX)/(now-minX)*pw,Y=v=>T+(hi-v)/(hi-lo)*ph;
   g.font='12px system-ui,sans-serif';g.lineWidth=1;
   g.strokeStyle='#2a2521';g.fillStyle='#a39686';g.textAlign='right';g.textBaseline='middle';
   for(let v=lo;v<=hi;v+=yStep){g.beginPath();g.moveTo(L,Y(v));g.lineTo(W-R,Y(v));g.stroke();g.fillText(v+'°',L-6,Y(v));}
-  g.textAlign='center';g.textBaseline='top';
-  const maxLabels=Math.max(2,Math.floor(pw/80));
-  const tStep=[5,10,15,30,60,120,180].map(m=>m*60e3).find(st=>(now-minX)/st<=maxLabels)||240*60e3;
-  for(let t=Math.ceil(minX/tStep)*tStep;t<=now;t+=tStep){g.fillText(fmtT(t),X(t),H-B+6);}
+  drawTimeLabels(g,X,pw,minX,now,H-B+6);
   g.save();g.lineWidth=1.5;g.setLineDash([6,5]);g.textAlign='right';g.textBaseline='bottom';g.font='11px system-ui,sans-serif';
   refs.forEach(([v,c,label])=>{g.strokeStyle=c;g.fillStyle=c;g.beginPath();g.moveTo(L,Y(v));g.lineTo(W-R,Y(v));g.stroke();
     g.fillText('pit '+label+' '+Math.round(v)+'°',W-R-2,Y(v)-2);});
@@ -295,24 +337,74 @@ function drawChart(){
       if(v==null||(prev&&q.x-prev>step*2.5)){pen=false;}
       if(v!=null){pen?g.lineTo(X(q.x),Y(v)):g.moveTo(X(q.x),Y(v));pen=true;prev=q.x;}});
     g.stroke();});
-  // hover / touch readout
+
+  // hover / touch readout (shared by both graphs)
   const ro=$('readout');
+  let best=null;
   if(hoverX!=null&&pts.length){
     const t=minX+(hoverX-L)/pw*(now-minX);
-    let best=pts[0];pts.forEach(q=>{if(Math.abs(q.x-t)<Math.abs(best.x-t))best=q;});
+    best=pts[0];pts.forEach(q=>{if(Math.abs(q.x-t)<Math.abs(best.x-t))best=q;});
     g.strokeStyle='#f2ebe455';g.lineWidth=1;g.beginPath();g.moveTo(X(best.x),T);g.lineTo(X(best.x),T+ph);g.stroke();
-    ro.innerHTML='<b>'+fmtT(best.x)+'</b> '+names.map((nm,p)=>best.v[p]==null?'':`<span style="color:${COLORS[p%COLORS.length]}">${esc(nm)} ${Math.round(best.v[p])}°</span>`).filter(Boolean).join(' · ');
+    ro.innerHTML='<b>'+fmtT(best.x)+'</b> '+names.map((nm,p)=>best.v[p]==null?'':`<span style="color:${COLORS[p%COLORS.length]}">${esc(nm)} ${Math.round(best.v[p])}°</span>`)
+      .concat(best.fan==null?[]:[`<span style="color:${FAN}">Fan ${best.fan}%</span>`]).filter(Boolean).join(' · ');
     ro.style.display='block';
   }else ro.style.display='none';
   $('legend').innerHTML=names.map((nm,p)=>`<span><i style="background:${COLORS[p%COLORS.length]}"></i>${esc(nm)}</span>`).join('')+
     (tgt>0?`<span><i style="background:${GREEN}"></i>Pit target</span>`:'')+
     (low>0||high>0?`<span><i style="background:${RED}"></i>Pit low / high alarm</span>`:'');
+
+  drawFanChart(pts,minX,now,step,best,hasFan);
 }
-(()=>{const cv=$('chart');
-  const mv=e=>{const r=cv.getBoundingClientRect();const x=(e.touches?e.touches[0].clientX:e.clientX)-r.left;hoverX=x>=46?x:null;drawChart();};
+// Fan % graph under the temps: same time window, 0-100% axis.
+function drawFanChart(pts,minX,now,step,best,hasFan){
+  $('fanBox').style.display=hasFan?'block':'none';
+  if(!hasFan)return;
+  const {g,W,H}=sizeCanvas($('fanChart'));
+  const L=CL,R=CR,T=8,B=22,pw=W-L-R,ph=H-T-B;
+  const X=t=>L+(t-minX)/(now-minX)*pw,YF=f=>T+(100-f)/100*ph;
+  g.font='12px system-ui,sans-serif';g.lineWidth=1;
+  g.strokeStyle='#2a2521';g.fillStyle='#a39686';g.textAlign='right';g.textBaseline='middle';
+  for(let f=0;f<=100;f+=50){g.beginPath();g.moveTo(L,YF(f));g.lineTo(W-R,YF(f));g.stroke();g.fillText(f+'%',L-6,YF(f));}
+  drawTimeLabels(g,X,pw,minX,now,H-B+5);
+  g.fillStyle=FAN;g.textAlign='left';g.textBaseline='top';g.fillText('Fan',L+4,T+2);
+
+  g.save();g.lineWidth=1.5;g.lineJoin='round';g.strokeStyle=FAN;g.fillStyle=FAN+'33';
+  let seg=[];
+  const flush=()=>{
+    if(seg.length>1){
+      g.beginPath();g.moveTo(X(seg[0].x),YF(0));seg.forEach(q=>g.lineTo(X(q.x),YF(q.fan)));
+      g.lineTo(X(seg[seg.length-1].x),YF(0));g.closePath();g.fill();
+      g.beginPath();seg.forEach((q,k)=>k?g.lineTo(X(q.x),YF(q.fan)):g.moveTo(X(q.x),YF(q.fan)));g.stroke();
+    }
+    seg=[];
+  };
+  pts.forEach(q=>{
+    if(q.fan==null||(seg.length&&q.x-seg[seg.length-1].x>step*2.5))flush();
+    if(q.fan!=null)seg.push(q);
+  });
+  flush();g.restore();
+  if(best){g.strokeStyle='#f2ebe455';g.lineWidth=1;g.beginPath();g.moveTo(X(best.x),T);g.lineTo(X(best.x),T+ph);g.stroke();}
+}
+// Hovering or touching either graph shows the same moment on both.
+['chart','fanChart'].forEach(id=>{const cv=$(id);
+  const mv=e=>{const r=cv.getBoundingClientRect();const x=(e.touches?e.touches[0].clientX:e.clientX)-r.left;hoverX=x>=CL?x:null;drawChart();};
   cv.addEventListener('mousemove',mv);cv.addEventListener('touchmove',mv,{passive:true});cv.addEventListener('touchstart',mv,{passive:true});
-  cv.addEventListener('mouseleave',()=>{hoverX=null;drawChart();});
-  window.addEventListener('resize',drawChart);})();
+  cv.addEventListener('mouseleave',()=>{hoverX=null;drawChart();});});
+window.addEventListener('resize',drawChart);
+
+// Tap a meat card's green check to clear it (the cards are rebuilt, so
+// listen on the container).
+$('cards').onclick=async e=>{
+  const h=e.target.closest('.hit.clickable');
+  if(!h)return;
+  const i=+h.id.slice(1),name=names[i]||'this probe';
+  if(!confirm('Clear the target-hit check for '+name+'?\n\nIts almost-done / done alerts re-arm too. If it is still at or above target, it will be marked hit again.'))return;
+  try{
+    const d=await (await fetch('/api/hit/clear',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({probe:i})})).json();
+    if(!d.ok)alert('Could not clear: '+(d.why||'error'));
+  }catch(err){alert('Could not clear: request failed');}
+  loadNow();
+};
 
 $('win').onclick=e=>{const h=e.target.dataset.h;if(!h)return;winH=+h;
   document.querySelectorAll('#win button').forEach(b=>b.classList.toggle('on',b==e.target));drawChart();};
@@ -340,6 +432,34 @@ $('newRec').onclick=async()=>{
     $('logMsg').textContent=d.ok?'New recording started.':'Could not reset: '+(d.why||'error');
   }catch(e){$('logMsg').textContent='Could not reset: request failed';}
   hoverX=null;loadNow().then(loadHistory);
+};
+
+// ---- fan ----
+function showFan(f){
+  if(!f)return;
+  $('fanPct').textContent=Math.round(f.pct)+'%';
+  if(!fanLoaded){
+    $('fanMode').value=f.mode;$('fanManual').value=f.manual;
+    $('fanKp').value=f.kp;$('fanKi').value=f.ki;$('fanKd').value=f.kd;
+    $('fanAlertPct').value=f.alertPct;$('fanAlertMin').value=f.alertMin;fanLoaded=true;
+  }
+  let note='',terms='';
+  if(f.mode==='off')note='Fan off';
+  else if(f.mode==='manual')note='Manual';
+  else if(f.note)note='Auto: fan off, '+f.note;
+  else{note='Auto: holding the pit target';terms='P '+f.p+'% · I '+f.i+'% · D '+f.d+'%';}
+  if(f.highFor>=0&&f.alertPct>0&&f.alertMin>0)
+    terms+=(terms?' · ':'')+'≥'+f.alertPct+'% for '+Math.floor(f.highFor/60)+' of '+f.alertMin+' min';
+  $('fanNote').textContent=note;$('fanTerms').textContent=terms;
+}
+$('fanSave').onclick=async()=>{
+  const num=id=>parseFloat($(id).value)||0;
+  try{
+    const d=await (await fetch('/api/fan',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({mode:$('fanMode').value,manual:num('fanManual'),kp:num('fanKp'),ki:num('fanKi'),kd:num('fanKd'),alertPct:num('fanAlertPct'),alertMin:num('fanAlertMin')})})).json();
+    $('fanMsg').textContent=d.ok?'Fan settings saved.':'Not saved: '+(d.why||'error');
+  }catch(e){$('fanMsg').textContent='Not saved: request failed';}
+  fanLoaded=false;loadNow();
 };
 
 // ---- cook step plans ----

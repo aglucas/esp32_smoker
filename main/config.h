@@ -96,6 +96,29 @@
 #define NEAR_DONE_F               5.0f     // "almost done" heads-up (0 = off)
 #define MEAT_REARM_F              15.0f    // re-arm meat alert if temp drops this far
 
+// ---- Fan (12 V PC fan, low-side 2N2222 switch) ----
+// GPIO high = transistor on = fan on. Driven by LEDC PWM.
+#define FAN_GPIO                  6        // D4 / GPIO6
+// Slow PWM: each pulse fully powers the fan's own driver chip and the rotor
+// smooths it out, so a 2/3-wire PC fan runs steadily at much lower speeds
+// than with fast (25 kHz) PWM, which starves its electronics. May hum a
+// little. Range with the 13-bit resolution in fan_control.c: ~10 Hz-9 kHz.
+#define FAN_PWM_FREQ_HZ           50
+#define FAN_KICK_MS               1000     // run 100% this long when starting from stopped
+#define FAN_MIN_PCT               5.0f     // any non-zero output below this is raised to it (fan stalls lower)
+// PID defaults (all editable on the web page and saved in NVS). The PID holds
+// the pit target from the pit card. Units:
+//   Kp: % fan per F below target
+//   Ki: % fan per (F below target x minute), accumulated
+//   Kd: % fan per (F/minute the pit is rising), subtracted
+#define DEFAULT_FAN_KP            4.0f
+#define DEFAULT_FAN_KI            0.0f
+#define DEFAULT_FAN_KD            0.0f
+// Fan alert (Auto mode): fan at or above this % for this long usually means
+// the fire is low on fuel or the vents are wrong. Either one 0 = off.
+#define DEFAULT_FAN_ALERT_PCT     90.0f
+#define DEFAULT_FAN_ALERT_MIN     15.0f
+
 // ---- Timing / history ----
 #define READ_MS                   2000     // read probes & check alerts
 #define SAMPLE_SEC                30       // web graph resolution

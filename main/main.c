@@ -20,6 +20,7 @@
 #include "web_server.h"
 #include "alerts.h"
 #include "cook_plan.h"
+#include "fan_control.h"
 
 static const char *TAG = "esp32_smoker";
 
@@ -36,7 +37,7 @@ static void start_mdns(void)
 }
 
 // Serial output doubles as a calibration log (mV + resistance per probe).
-static void log_readings(const probe_reading_t r[NUM_PROBES])
+static void log_readings(const probe_reading_t r[NUM_PROBES], float fan_pct)
 {
     char line[256];
     int len = 0;
@@ -53,6 +54,9 @@ static void log_readings(const probe_reading_t r[NUM_PROBES])
         }
         len += snprintf(line + len, sizeof(line) - len, "%s%s: %s F (%.0f mV, %.0f ohm)",
                         i ? " | " : "", temp_sensor_probe_name(i), temp, r[i].mv, r[i].ohms);
+    }
+    if (len < (int)sizeof(line)) {
+        snprintf(line + len, sizeof(line) - len, " | Fan: %.0f%%", fan_pct);
     }
     ESP_LOGI(TAG, "%s", line);
 }
@@ -84,6 +88,7 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
+    ESP_ERROR_CHECK(fan_control_init());   // first, so the fan output starts off
     ESP_ERROR_CHECK(temp_sensor_init());
     if (data_log_init() != ESP_OK) {
         ESP_LOGW(TAG, "Continuing without flash logging");
@@ -115,7 +120,14 @@ void app_main(void)
         }
         alerts_check(temps_f);
         cook_plan_tick();
-        log_readings(r);
+
+        alert_settings_t settings;
+        alerts_get_settings(&settings);
+        fan_control_update(temps_f[0], settings.target[0], settings.pit_high);
+        fan_status_t fan;
+        fan_control_get_status(&fan);
+        temp_sensor_set_fan_pct(fan.pct);
+        log_readings(r, fan.pct);
 
         int64_t now_us = esp_timer_get_time();
         if (!clock_synced && time(NULL) > UNIX_TIME_VALID) {
@@ -128,7 +140,7 @@ void app_main(void)
         }
         if (last_log_us == 0 || now_us - last_log_us >= (int64_t)LOG_INTERVAL_MS * 1000) {
             last_log_us = now_us;
-            data_log_append((uint32_t)(now_us / 1000000), temps_f);
+            data_log_append((uint32_t)(now_us / 1000000), temps_f, fan.pct);
         }
 
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(READ_MS));

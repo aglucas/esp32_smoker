@@ -19,9 +19,10 @@ bool data_log_available(void);
 // rest of the app keeps running without logging.
 esp_err_t data_log_init(void);
 
-// Appends one CSV row: uptime_s,unix_time,local_time,<one column per probe in F>.
-// NAN temps are written as empty cells; time columns are blank until SNTP syncs.
-esp_err_t data_log_append(uint32_t uptime_s, const float temps_f[NUM_PROBES]);
+// Appends one CSV row: uptime_s,unix_time,local_time,<one column per probe in F>,fan_pct.
+// NAN temps (and a negative fan_pct) are written as empty cells; time columns
+// are blank until SNTP syncs.
+esp_err_t data_log_append(uint32_t uptime_s, const float temps_f[NUM_PROBES], float fan_pct);
 
 // Deletes all logged data and starts a fresh file. Fails with
 // ESP_ERR_INVALID_STATE while a download is in progress, and

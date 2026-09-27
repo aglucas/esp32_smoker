@@ -42,6 +42,31 @@ static long file_size(const char *path)
     return stat(path, &st) == 0 ? (long)st.st_size : -1;
 }
 
+// The CSV header for the current firmware (no trailing newline).
+static void build_header(char *buf, size_t len)
+{
+    int n = snprintf(buf, len, "uptime_s,unix_time,local_time");
+    for (int i = 0; i < NUM_PROBES && n < (int)len; i++) {
+        n += snprintf(buf + n, len - n, ",%s_f", temp_sensor_probe_name(i));
+    }
+    if (n < (int)len) {
+        snprintf(buf + n, len - n, ",fan_pct");
+    }
+}
+
+// First line of a file without its newline ("" if missing/empty).
+static void read_first_line(const char *path, char *buf, size_t len)
+{
+    buf[0] = '\0';
+    FILE *f = fopen(path, "r");
+    if (f) {
+        if (fgets(buf, len, f)) {
+            buf[strcspn(buf, "\r\n")] = '\0';
+        }
+        fclose(f);
+    }
+}
+
 // Caller holds s_mutex.
 static esp_err_t write_header_locked(void)
 {
@@ -50,11 +75,9 @@ static esp_err_t write_header_locked(void)
         ESP_LOGE(TAG, "Failed to create %s", LOG_PATH);
         return ESP_FAIL;
     }
-    fprintf(f, "uptime_s,unix_time,local_time");
-    for (int i = 0; i < NUM_PROBES; i++) {
-        fprintf(f, ",%s_f", temp_sensor_probe_name(i));
-    }
-    fprintf(f, "\n");
+    char header[160];
+    build_header(header, sizeof(header));
+    fprintf(f, "%s\n", header);
     fclose(f);
     return ESP_OK;
 }
@@ -106,6 +129,19 @@ esp_err_t data_log_init(void)
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     if (file_size(LOG_PATH) < 0) {
         err = write_header_locked();
+    } else {
+        // Columns changed (e.g. firmware added fan_pct): keep the old rows as
+        // the previous file and start a new one, so each file's header
+        // matches its rows.
+        char want[160], have[160];
+        build_header(want, sizeof(want));
+        read_first_line(LOG_PATH, have, sizeof(have));
+        if (strcmp(want, have) != 0) {
+            ESP_LOGI(TAG, "Log columns changed; starting a new log file");
+            remove(OLD_LOG_PATH);
+            rename(LOG_PATH, OLD_LOG_PATH);
+            err = write_header_locked();
+        }
     }
     xSemaphoreGive(s_mutex);
     if (err != ESP_OK) {
@@ -124,7 +160,7 @@ bool data_log_available(void)
     return s_available;
 }
 
-esp_err_t data_log_append(uint32_t uptime_s, const float temps_f[NUM_PROBES])
+esp_err_t data_log_append(uint32_t uptime_s, const float temps_f[NUM_PROBES], float fan_pct)
 {
     if (!s_available) {
         return ESP_ERR_INVALID_STATE;
@@ -145,6 +181,10 @@ esp_err_t data_log_append(uint32_t uptime_s, const float temps_f[NUM_PROBES])
     for (int i = 0; i < NUM_PROBES && len < (int)sizeof(row); i++) {
         len += isnan(temps_f[i]) ? snprintf(row + len, sizeof(row) - len, ",")
                                  : snprintf(row + len, sizeof(row) - len, ",%.1f", temps_f[i]);
+    }
+    if (len < (int)sizeof(row)) {
+        len += fan_pct < 0 ? snprintf(row + len, sizeof(row) - len, ",")
+                           : snprintf(row + len, sizeof(row) - len, ",%.0f", fan_pct);
     }
 
     esp_err_t err = ESP_OK;
@@ -174,6 +214,7 @@ typedef struct {
     uint32_t uptime;
     uint32_t unix_time;     // 0 = logged before the clock synced
     int16_t v[NUM_PROBES];
+    uint8_t fan;            // FAN_NO_DATA in rows from before the fan column
 } parsed_row_t;
 
 // Parses "uptime_s,unix_time,local_time,t0,t1,..." (header/partial lines fail).
@@ -182,9 +223,10 @@ static bool parse_row(char *line, parsed_row_t *r)
     if (line[0] < '0' || line[0] > '9') {
         return false;
     }
-    char *field[3 + NUM_PROBES];
+    // uptime, unix, local, one per probe, then fan_pct (absent in older rows)
+    char *field[3 + NUM_PROBES + 1];
     int nf = 0;
-    for (char *p = line; nf < 3 + NUM_PROBES; nf++) {
+    for (char *p = line; nf < 3 + NUM_PROBES + 1; nf++) {
         field[nf] = p;
         char *comma = strchr(p, ',');
         if (!comma) {
@@ -203,6 +245,15 @@ static bool parse_row(char *line, parsed_row_t *r)
         char *f = field[3 + i];
         f[strcspn(f, "\r\n")] = '\0';
         r->v[i] = *f ? (int16_t)lroundf(strtof(f, NULL) * 10) : NO_DATA;
+    }
+    r->fan = FAN_NO_DATA;
+    if (nf > 3 + NUM_PROBES) {
+        char *f = field[3 + NUM_PROBES];
+        f[strcspn(f, "\r\n")] = '\0';
+        if (*f) {
+            long pct = strtol(f, NULL, 10);
+            r->fan = (uint8_t)(pct < 0 ? 0 : pct > 100 ? 100 : pct);
+        }
     }
     return true;
 }
@@ -310,6 +361,7 @@ esp_err_t data_log_read_recent(uint32_t since_unix, hist_entry_t **out, size_t *
             if (t >= since_unix) {
                 res[out_n].t = t;
                 memcpy(res[out_n].v, r->v, sizeof(r->v));
+                res[out_n].fan = r->fan;
                 out_n++;
             }
         }
@@ -392,6 +444,15 @@ esp_err_t data_log_stream(data_log_chunk_cb_t cb, void *ctx)
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     s_readers++;
     bool have_old = file_size(OLD_LOG_PATH) >= 0;
+    // The newer file's header is dropped only when it matches the older one;
+    // after a column change both headers are kept so each block is labelled.
+    bool same_header = false;
+    if (have_old) {
+        char h_old[160], h_new[160];
+        read_first_line(OLD_LOG_PATH, h_old, sizeof(h_old));
+        read_first_line(LOG_PATH, h_new, sizeof(h_new));
+        same_header = strcmp(h_old, h_new) == 0;
+    }
     xSemaphoreGive(s_mutex);
 
     esp_err_t err = ESP_OK;
@@ -399,7 +460,7 @@ esp_err_t data_log_stream(data_log_chunk_cb_t cb, void *ctx)
         err = stream_file(OLD_LOG_PATH, false, buf, 1024, cb, ctx);
     }
     if (err == ESP_OK) {
-        err = stream_file(LOG_PATH, have_old, buf, 1024, cb, ctx);
+        err = stream_file(LOG_PATH, same_header, buf, 1024, cb, ctx);
     }
 
     xSemaphoreTake(s_mutex, portMAX_DELAY);

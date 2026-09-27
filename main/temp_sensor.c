@@ -177,6 +177,13 @@ void temp_sensor_get_current(probe_reading_t out[NUM_PROBES])
     xSemaphoreGive(s_current_mutex);
 }
 
+static volatile uint8_t s_fan_pct = FAN_NO_DATA;
+
+void temp_sensor_set_fan_pct(float pct)
+{
+    s_fan_pct = (uint8_t)lroundf(pct < 0 ? 0 : pct > 100 ? 100 : pct);
+}
+
 static uint32_t uptime_s(void)
 {
     return (uint32_t)(esp_timer_get_time() / 1000000);
@@ -203,6 +210,7 @@ void temp_sensor_push_history(void)
     for (int i = 0; i < NUM_PROBES; i++) {
         e.v[i] = isnan(r[i].temp_f) ? NO_DATA : (int16_t)lroundf(r[i].temp_f * 10);
     }
+    e.fan = s_fan_pct;
 
     xSemaphoreTake(s_history_mutex, portMAX_DELAY);
     history_append_locked(&e);

@@ -51,6 +51,11 @@ esp_err_t alerts_set_ntfy(const ntfy_config_t *in, const char **why);
 // indicators and the last-alert text. Settings are kept.
 void alerts_reset_session(void);
 
+// Clears one meat probe's "target reached" indicator and re-arms its
+// almost-done / done alerts (e.g. a new piece of meat). If the probe is
+// still at/above target it will be marked reached again at the next reading.
+esp_err_t alerts_clear_target_hit(int probe);
+
 // Queues a test notification. Returns false (with *why set) if it can't be
 // delivered, e.g. no internet in setup-AP mode.
 bool alerts_send_test(float pit_f, const char **why);

@@ -11,6 +11,7 @@
 #include "alerts.h"
 #include "data_log.h"
 #include "cook_plan.h"
+#include "fan_control.h"
 #include "config.h"
 
 #include "esp_http_server.h"
@@ -122,6 +123,20 @@ static esp_err_t plan_start_post_handler(httpd_req_t *req)
     return send_ok_or_why(req, err, why);
 }
 
+// Body: {"probe":1}  (a meat probe index)
+static esp_err_t hit_clear_post_handler(httpd_req_t *req)
+{
+    char buf[64];
+    if (!read_body(req, buf, sizeof(buf))) {
+        return httpd_resp_send_500(req);
+    }
+    cJSON *root = cJSON_Parse(buf);
+    const cJSON *probe = cJSON_GetObjectItem(root, "probe");
+    esp_err_t err = cJSON_IsNumber(probe) ? alerts_clear_target_hit(probe->valueint) : ESP_ERR_INVALID_ARG;
+    cJSON_Delete(root);
+    return send_ok_or_why(req, err, "not a meat probe");
+}
+
 static esp_err_t plan_stop_post_handler(httpd_req_t *req)
 {
     cook_plan_stop();
@@ -165,6 +180,25 @@ static esp_err_t now_get_handler(httpd_req_t *req)
     ntfy_config_t ntfy;
     alerts_get_ntfy(&ntfy);
     cook_plan_add_status(root);
+
+    fan_settings_t fs;
+    fan_status_t fst;
+    fan_control_get_settings(&fs);
+    fan_control_get_status(&fst);
+    cJSON *fj = cJSON_AddObjectToObject(root, "fan");
+    cJSON_AddNumberToObject(fj, "pct", roundf(fst.pct));
+    cJSON_AddStringToObject(fj, "mode", fs.mode == FAN_MODE_OFF ? "off" : fs.mode == FAN_MODE_MANUAL ? "manual" : "auto");
+    cJSON_AddNumberToObject(fj, "manual", fs.manual_pct);
+    cJSON_AddNumberToObject(fj, "kp", fs.kp);
+    cJSON_AddNumberToObject(fj, "ki", fs.ki);
+    cJSON_AddNumberToObject(fj, "kd", fs.kd);
+    cJSON_AddNumberToObject(fj, "alertPct", fs.alert_pct);
+    cJSON_AddNumberToObject(fj, "alertMin", fs.alert_min);
+    cJSON_AddNumberToObject(fj, "highFor", fst.high_for_s);
+    cJSON_AddNumberToObject(fj, "p", roundf(fst.p * 10) / 10);
+    cJSON_AddNumberToObject(fj, "i", roundf(fst.i * 10) / 10);
+    cJSON_AddNumberToObject(fj, "d", roundf(fst.d * 10) / 10);
+    cJSON_AddStringToObject(fj, "note", fst.note);
 
     cJSON *nj = cJSON_AddObjectToObject(root, "ntfy");
     cJSON_AddBoolToObject(nj, "enabled", ntfy.enabled);
@@ -238,7 +272,8 @@ static esp_err_t history_get_handler(httpd_req_t *req)
                 len += snprintf(buf + len, sizeof(buf) - len, ",%.1f", v / 10.0f);
             }
         }
-        len += snprintf(buf + len, sizeof(buf) - len, "]");
+        len += rows[k].fan == FAN_NO_DATA ? snprintf(buf + len, sizeof(buf) - len, ",null]")
+                                          : snprintf(buf + len, sizeof(buf) - len, ",%u]", rows[k].fan);
         if (len > 1200) {
             err = httpd_resp_send_chunk(req, buf, len);
             len = 0;
@@ -344,6 +379,38 @@ static esp_err_t reset_post_handler(httpd_req_t *req)
     return httpd_resp_sendstr(req, "{\"ok\":false,\"why\":\"graph and alerts reset, but the flash log could not be cleared\"}");
 }
 
+// Body is JSON: {"mode":"auto"|"manual"|"off","manual":50,"kp":4,"ki":0,"kd":0,
+//                "alertPct":90,"alertMin":15}
+static esp_err_t fan_post_handler(httpd_req_t *req)
+{
+    char buf[256];
+    if (!read_body(req, buf, sizeof(buf))) {
+        return httpd_resp_send_500(req);
+    }
+    cJSON *root = cJSON_Parse(buf);
+    if (!root) {
+        return send_ok_or_why(req, ESP_ERR_INVALID_ARG, "invalid json");
+    }
+    fan_settings_t c;
+    fan_control_get_settings(&c);
+    const cJSON *mode = cJSON_GetObjectItem(root, "mode");
+    if (cJSON_IsString(mode)) {
+        c.mode = strcmp(mode->valuestring, "off") == 0      ? FAN_MODE_OFF
+               : strcmp(mode->valuestring, "manual") == 0   ? FAN_MODE_MANUAL
+                                                            : FAN_MODE_AUTO;
+    }
+    const cJSON *v;
+    if (cJSON_IsNumber(v = cJSON_GetObjectItem(root, "manual"))) c.manual_pct = v->valuedouble;
+    if (cJSON_IsNumber(v = cJSON_GetObjectItem(root, "kp")))     c.kp = v->valuedouble;
+    if (cJSON_IsNumber(v = cJSON_GetObjectItem(root, "ki")))     c.ki = v->valuedouble;
+    if (cJSON_IsNumber(v = cJSON_GetObjectItem(root, "kd")))     c.kd = v->valuedouble;
+    if (cJSON_IsNumber(v = cJSON_GetObjectItem(root, "alertPct"))) c.alert_pct = v->valuedouble;
+    if (cJSON_IsNumber(v = cJSON_GetObjectItem(root, "alertMin"))) c.alert_min = v->valuedouble;
+    cJSON_Delete(root);
+    esp_err_t err = fan_control_set_settings(&c);
+    return send_ok_or_why(req, err, "could not save to flash");
+}
+
 // Body is JSON: {"enabled":true,"server":"https://ntfy.sh","topic":"..."}
 static esp_err_t ntfy_post_handler(httpd_req_t *req)
 {
@@ -426,7 +493,7 @@ static esp_err_t wifi_post_handler(httpd_req_t *req)
 esp_err_t web_server_start(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 16;
+    config.max_uri_handlers = 20;
     config.lru_purge_enable = true;   // phones hold idle sockets open
     config.stack_size = 6144;         // history handler formats floats into a 1.4 KB buffer
 
@@ -441,7 +508,9 @@ esp_err_t web_server_start(void)
         { .uri = "/api/test",     .method = HTTP_POST, .handler = test_post_handler },
         { .uri = "/api/log.csv",  .method = HTTP_GET,  .handler = log_get_handler },
         { .uri = "/api/reset",    .method = HTTP_POST, .handler = reset_post_handler },
+        { .uri = "/api/hit/clear", .method = HTTP_POST, .handler = hit_clear_post_handler },
         { .uri = "/api/ntfy",     .method = HTTP_POST, .handler = ntfy_post_handler },
+        { .uri = "/api/fan",      .method = HTTP_POST, .handler = fan_post_handler },
         { .uri = "/api/plans",    .method = HTTP_GET,  .handler = plans_get_handler },
         { .uri = "/api/plans",    .method = HTTP_POST, .handler = plans_post_handler },
         { .uri = "/api/plan/start", .method = HTTP_POST, .handler = plan_start_post_handler },

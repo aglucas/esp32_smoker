@@ -545,6 +545,21 @@ esp_err_t alerts_set_ntfy(const ntfy_config_t *in, const char **why)
     return err;
 }
 
+esp_err_t alerts_clear_target_hit(int probe)
+{
+    if (probe < 1 || probe >= NUM_PROBES) {
+        return ESP_ERR_INVALID_ARG;   // the pit (0) has no target-hit indicator
+    }
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_hits[probe] = (target_hit_rec_t){0};
+    s_hit_us[probe] = 0;
+    s_done_sent[probe] = s_near_sent[probe] = false;
+    save_hits_locked();
+    xSemaphoreGive(s_mutex);
+    ESP_LOGI(TAG, "%s: target-hit cleared", temp_sensor_probe_name(probe));
+    return ESP_OK;
+}
+
 void alerts_reset_session(void)
 {
     xSemaphoreTake(s_mutex, portMAX_DELAY);
