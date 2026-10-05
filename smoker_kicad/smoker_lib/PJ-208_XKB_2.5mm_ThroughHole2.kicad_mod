@@ -1,0 +1,176 @@
+(footprint "PJ-208_XKB_2.5mm_ThroughHole2"
+	(version 20260206)
+	(generator "pcbnew")
+	(generator_version "10.0")
+	(layer "F.Cu")
+	(descr "XKB PJ-208 2.5mm 3-pin PCB-mount phone jack; based on XKB drawing PJ-208")
+	(tags "PJ-208 XKB 2.5mm phone jack audio headphone")
+	(property "Reference" "J"
+		(at 4.7 -2.35 0)
+		(layer "F.SilkS")
+		(uuid "5ab44237-861d-4903-a66b-5c843955e677")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "PJ-208"
+		(at 4.7 3.95 0)
+		(layer "F.Fab")
+		(uuid "65063e4f-b767-46fe-a515-de1f6721c308")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "da2e9eb6-96e1-4683-a9c5-a179f307537d")
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "ad576492-7a29-4857-94cc-bb43b8bd3156")
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+	)
+	(attr through_hole)
+	(duplicate_pad_numbers_are_jumpers no)
+	(fp_line
+		(start -1.3 -1.7)
+		(end -1.3 3.3)
+		(stroke
+			(width 0.12)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "a3379eec-a418-4ef1-89f1-5ab033d6fd99")
+	)
+	(fp_line
+		(start -1.3 -1.7)
+		(end 1 -1.7)
+		(stroke
+			(width 0.12)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "fa4167f7-efe1-421f-b77a-10af80399fda")
+	)
+	(fp_line
+		(start -1.3 3.3)
+		(end 10 3.3)
+		(stroke
+			(width 0.12)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "121fdfbc-241e-4322-b01b-523d872c9dae")
+	)
+	(fp_line
+		(start 10 -1.7)
+		(end 7.8 -1.7)
+		(stroke
+			(width 0.12)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "950ef7fd-9779-443a-b7db-2f74c54a77d2")
+	)
+	(fp_line
+		(start 10 -1.7)
+		(end 10 3.3)
+		(stroke
+			(width 0.12)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "62edfcd6-36aa-4bd1-afd0-ab7fb311dba1")
+	)
+	(fp_rect
+		(start -1.3 -1.7)
+		(end 10 3.3)
+		(stroke
+			(width 0.12)
+			(type default)
+		)
+		(fill no)
+		(layer "F.SilkS")
+		(uuid "972a6d67-44c0-4c8f-89ea-75a82a50242c")
+	)
+	(fp_rect
+		(start -1 -1.4)
+		(end 9.7 3)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(fill no)
+		(layer "F.CrtYd")
+		(uuid "4700a87e-89e3-4297-88e3-f498b82c7bd0")
+	)
+	(fp_rect
+		(start -1.3 -1.7)
+		(end 10 3.3)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(fill no)
+		(layer "F.Fab")
+		(uuid "c229687c-95bd-4e7e-ad56-42e12c0c8887")
+	)
+	(pad "" np_thru_hole circle
+		(at 1.5 2.6)
+		(size 1.3 1.3)
+		(drill 0.7)
+		(layers "*.Cu" "*.Mask")
+		(uuid "024108a6-4e6b-4dc9-82a3-1949f366bd52")
+	)
+	(pad "" np_thru_hole circle
+		(at 8 2.6)
+		(size 1.3 1.3)
+		(drill 0.7)
+		(layers "*.Cu" "*.Mask")
+		(uuid "780c0d49-32a4-42b1-8bdb-1687a535d0ff")
+	)
+	(pad "R" thru_hole rect
+		(at 1.7 0)
+		(size 2 2)
+		(drill 1.2)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "04889f77-99f8-4704-a0dc-4b652053c8fc")
+	)
+	(pad "S" thru_hole circle
+		(at 4.4 0)
+		(size 2 2)
+		(drill 1.2)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "86044498-8da8-4bf3-bba9-85a08c3253be")
+	)
+	(pad "T" thru_hole circle
+		(at 8.5 0)
+		(size 2 2)
+		(drill 1.2)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "88d68b73-da10-4584-b42d-a40e8666e2e4")
+	)
+	(embedded_fonts no)
+)
